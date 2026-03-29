@@ -1,0 +1,18 @@
+{
+    "description": "SFOC",
+    "DG1": {
+        "alpha1": 0.3,
+        "alpha2": 5.0,
+        "alpha3": 36.3
+    },
+    "DG2": {
+        "alpha1": 0.3,
+        "alpha2": 5.0,
+        "alpha3": 36.3
+    },
+    "DG3": {
+        "alpha1": 0.4,
+        "alpha2": 5.0,
+        "alpha3": 21.0
+    }
+}
