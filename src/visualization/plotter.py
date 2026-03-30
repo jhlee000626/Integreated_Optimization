@@ -15,6 +15,26 @@ from matplotlib.collections import LineCollection
 from shapely.geometry import MultiPolygon
 
 
+def _build_visual_route(route: dict) -> dict:
+    """Pad the route for display so speed starts/ends at zero."""
+    waypoints = list(route["waypoints"])
+    speeds = list(route["speeds"])
+    headings = list(route["headings"])
+
+    if not waypoints or not speeds or not headings:
+        return {"waypoints": waypoints, "speeds": speeds, "headings": headings}
+
+    visual_waypoints = [waypoints[0], *waypoints, waypoints[-1]]
+    visual_speeds = [0.0, *speeds, 0.0]
+    visual_headings = [headings[0], *headings, headings[-1]]
+
+    return {
+        "waypoints": visual_waypoints,
+        "speeds": visual_speeds,
+        "headings": visual_headings,
+    }
+
+
 def plot_optimal_route(
     route: dict,
     cost_map,
@@ -54,10 +74,11 @@ def plot_optimal_route(
     ax.clabel(cs, inline=True, fontsize=7, fmt='%.0f')
 
     # ── 최적 경로 ──
-    wps = route["waypoints"]
+    visual_route = _build_visual_route(route)
+    wps = visual_route["waypoints"]
     lats = [wp[0] for wp in wps]
     lons = [wp[1] for wp in wps]
-    speeds = route["speeds"]
+    speeds = visual_route["speeds"]
 
     # 속도에 따른 색상 (느림=파랑, 빠름=빨강)
     v_min, v_max = min(speeds), max(speeds)

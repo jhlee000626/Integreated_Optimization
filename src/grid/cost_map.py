@@ -279,9 +279,9 @@ class CostMap:
                     markersize=4, markeredgecolor='blue', label='Route')
 
         # 항구
-        ax.plot(BUSAN_PORT[1], BUSAN_PORT[0], '*', color='#orange',
+        ax.plot(BUSAN_PORT[1], BUSAN_PORT[0], '*', color='orange',
                 markersize=15, markeredgecolor='black', label='Busan Port')
-        ax.plot(JEJU_PORT[1], JEJU_PORT[0], '*', color='#orange',
+        ax.plot(JEJU_PORT[1], JEJU_PORT[0], '*', color='orange',
                 markersize=15, markeredgecolor='black', label='Jeju Port')
 
         # cbar = fig.colorbar(im, ax=ax, shrink=0.7)
@@ -310,5 +310,4 @@ def build_cost_map(
     """CostMap 인스턴스 생성 + 구축."""
     cmap = CostMap(resolution=resolution)
     return cmap.build()
-
 

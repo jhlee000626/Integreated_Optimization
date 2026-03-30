@@ -122,3 +122,21 @@ class ERA5Loader:
 
     def close(self):
         self.ds.close()
+
+
+def create_synthetic_weather(
+    base_wind_speed: float = 15.0,
+    base_wind_dir: float = 315.0,
+) -> Callable[[float, float], Tuple[float, float]]:
+    """
+    Create a lightweight deterministic weather callback for verification cases.
+    """
+
+    def weather_fn(lat: float, lon: float) -> Tuple[float, float]:
+        speed_variation = 1.5 * math.sin(math.radians(lat * 6.0))
+        dir_variation = 12.0 * math.cos(math.radians(lon * 4.0))
+        wind_speed = max(0.0, base_wind_speed + speed_variation)
+        wind_dir = (base_wind_dir + dir_variation) % 360.0
+        return float(wind_speed), float(wind_dir)
+
+    return weather_fn

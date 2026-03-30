@@ -95,7 +95,7 @@ def main():
         milp_solver=milp,
         weather_fn=weather_fn,
         n_segments=24,
-        pop_size=100,
+        pop_size=20,
         n_gen=100,
         seed=42,
         n_workers=0,            # 0 = CPU 코어 자동 감지
