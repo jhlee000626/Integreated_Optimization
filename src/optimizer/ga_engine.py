@@ -11,7 +11,7 @@ DEAP GA 엔진 — 항로 + 속도 통합 최적화 (병렬 지원)
     마지막 구간: 목적지(제주항)까지 직접 연결, V_n 역산 → RTA 강제 충족
 
 제약:
-    1. 육지 회피 (Gaussian Cost Map 기반 Soft/Hard Penalty)
+    1. 육지 회피 (Cost Map 기반 Hard Penalty)
     2. 속도 범위: V_min ≤ V_i ≤ V_max
     3. RTA = 12h (Required Time of Arrival)
 
@@ -32,9 +32,9 @@ import sys
 import numpy as np
 
 # Legacy path bootstrap for direct script execution.
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# if project_root not in sys.path:
+#     sys.path.insert(0, project_root)
 
 from typing import Tuple
 from deap import base, creator, tools, algorithms
@@ -50,6 +50,7 @@ from src.grid.no_go_zone import BUSAN_PORT, JEJU_PORT
 
 BIG_PENALTY = 1e12
 RTA_HOURS = 12           # Required Time of Arrival (h)
+MAX_HEADING_DELTA = 30.0
 V_MIN, V_MAX = 5.0, 24.0    # 순항 속도 범위 (knots)
 GAMMA = 0.7                 # 출/입항 감속 계수
 V_MIN_PORT = V_MIN          # 출/입항 최소 속도 (감속 미적용)
@@ -139,19 +140,22 @@ def decode_route(
     dt_per_seg = rta_h / n_segments
 
     speeds_free = [individual[i * 2] for i in range(n_free)]
-    headings_free = [individual[i * 2 + 1] for i in range(n_free)]
+    delta_headings_free = [individual[i * 2 + 1] for i in range(n_free)]
 
     waypoints = [BUSAN_PORT]
     speeds = []
     headings = []
+    delta_heaadings = []
     distances = []
     dt_list = []
 
     current_lat, current_lon = BUSAN_PORT
+    prev_heading = compute_bearing(*BUSAN_PORT, *JEJU_PORT)
 
     for i in range(n_free):
         v_kts = speeds_free[i]
-        theta_deg = headings_free[i]
+        delta_deg = delta_headings_free[i]
+        theta_deg = (prev_heading + delta_deg) % 360
         dist_nm = v_kts * dt_per_seg
 
         new_lat, new_lon = move_position(
@@ -161,6 +165,7 @@ def decode_route(
         waypoints.append((new_lat, new_lon))
         speeds.append(v_kts)
         headings.append(theta_deg)
+        delta_heaadings.append(delta_deg)
         distances.append(dist_nm)
         dt_list.append(dt_per_seg)
         current_lat, current_lon = new_lat, new_lon
@@ -172,10 +177,12 @@ def decode_route(
         (current_lat, current_lon), (dest_lat, dest_lon),
     )
     v_last = final_dist_nm / dt_per_seg if dt_per_seg > 0 else 0
+    final_heading_delta = ((final_heading - prev_heading + 180.0) % 360.0) - 180.0
 
     waypoints.append(JEJU_PORT)
     speeds.append(v_last)
     headings.append(final_heading)
+    delta_heaadings.append(final_heading_delta)
     distances.append(final_dist_nm)
     dt_list.append(dt_per_seg)
 
@@ -275,12 +282,16 @@ def evaluate(
       - 그 이하면 soft penalty로 연료에 가산
     """
 
+    # Chromosome을 n_segments수에 맞게 Velo, heading 나누고
+    # 이때, segment 수와 rta_h를 맞춰 마지막 velo, heading까지 decoding하여 넣어줌
     route = decode_route(individual, n_segments, rta_h)
 
     # 1. 마지막 구간 속도 타당성 패널티
     valid_penalty = 0.0
     if not route["valid"]:
         v_last = route["last_speed"]
+
+        # 마지막 구간이 V_min보다 작을 경우 약간의 가산 penalty
         if v_last < V_MIN_PORT:
             valid_penalty = BIG_PENALTY * (1 + (V_MIN_PORT - v_last) / V_MIN_PORT)
         else:
@@ -293,8 +304,9 @@ def evaluate(
         # 육지 관통 시 속도 패널티보다 10배 무거운 하드 패널티 부여
         violation_penalty = BIG_PENALTY * 10.0 * (1 + violation / 100)
 
+
     # 둘 중 하나라도 위반이면 즉시 패널티 반환
-    if valid_penalty > 0 or violation_penalty > 0:
+    if valid_penalty > 0 and violation_penalty > 0:
         return (valid_penalty + violation_penalty,)
 
     # 각 구간별 P_req (Kwon's Method)
@@ -313,9 +325,17 @@ def evaluate(
         else:
             wind_speed, wind_dir = 0.0, 0.0
 
-        encounter = abs((wind_dir - heading + 180) % 360)
-        if encounter > 180:
-            encounter = 360 - encounter
+        # 벡터 방식으로 encounter angle 계산(cosine 제 2법칙)
+        encounter_rad = math.radians(heading - wind_dir)
+        encounter_x = v_kts * 0.5144 + wind_speed * math.cos(encounter_rad)
+        encounter_y = wind_speed * math.sin(encounter_rad)
+        encounter = math.atan2(encounter_y, encounter_x)
+        encounter_deg = math.degrees(encounter) % 360
+
+        # 기존 방식 (절대 각도 차이)
+        # encounter = abs((wind_dir - heading + 180) % 360)
+        # if encounter > 180:
+        #     encounter = 360 - encounter
 
         if i == 0:
             P_service = SERVICE_LOAD["departure"]
@@ -334,6 +354,11 @@ def evaluate(
         P_req_list.append(result["P_req"])
 
     # MILP 풀이
+    '''
+    P_req_list = [p1, p2, ..., p_n]
+    milp_solver.solve() → {"feasible": bool, "total_fuel_kg": float, ...}
+    초기 SOC 
+    '''
     milp_result = milp_solver.solve(
         P_req=P_req_list,
         dt=route["dt"],
@@ -344,6 +369,7 @@ def evaluate(
     if not milp_result["feasible"]:
         return (BIG_PENALTY,)
 
+    # 나중에 꼭 고쳐야 함 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     # Fitness = 연료 + λ × violation (soft penalty)
     fuel = milp_result["total_fuel_kg"]
     return (fuel + LAMBDA_VIOLATION * violation,)
@@ -360,13 +386,12 @@ def setup_ga(
     n_segments: int = N_SEGMENTS,
     pop_size: int = 100,
     n_gen: int = 50,
-    cx_prob: float = 0.7,
-    mut_prob: float = 0.3,
-    tournament_size: int = 3,
-    seed: int = 42,
-    n_workers: int = 1,
+    cx_prob: float = 0.7, # 교차 확률
+    mut_prob: float = 0.3, # 변이 확률
+    tournament_size: int = 3, # 토너먼트 선택 크기
+    seed: int = 42, # 랜덤 시드 고정
+    n_workers: int = 1, 
     sfoc_path: str = "config/sfoc.json",
-    verbose: bool = True,
 ):
     """
     DEAP GA 전체 설정 + 실행.
@@ -374,7 +399,7 @@ def setup_ga(
     Parameters
     ----------
     cost_map : CostMap
-        Gaussian Cost Map (violation 평가용)
+        Cost Map (violation 평가용)
     n_workers : int
         병렬 워커 수. 0이면 CPU 코어 수 자동 감지.
     sfoc_path : str
@@ -387,16 +412,21 @@ def setup_ga(
     n_genes = n_free * 2
 
     # ── DEAP 타입 생성 ──
+    # DEAP의 creator는 한 번만 생성해야 하므로, 이미 존재하는지 확인 후 생성
+    # FitnessMin은 weghts=(-1.0,)으로 단일 목적 최소화 문제 정의, 적합도 클래스 생성
+    # Individual은 list 기반으로 fitness 속성 추가
     if "FitnessMin" not in dir(creator):
         creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
     if "Individual" not in dir(creator):
         creator.create("Individual", list, fitness=creator.FitnessMin)
 
+    # toolbox는 유전자 초기화, 교차, 변이, 선택 함수 등록용 DEAP 객체
     toolbox = base.Toolbox()
 
     # ── 유전자 초기화 ──
     base_bearing = compute_bearing(*BUSAN_PORT, *JEJU_PORT)
 
+    # 초기 개체 생성 함수: 각 구간별로 속도와 방위각을 랜덤하게 생성
     def init_individual():
         genes = []
         for seg in range(n_free):
@@ -404,21 +434,24 @@ def setup_ga(
                 genes.append(random.uniform(V_MIN_PORT, V_MAX_PORT))
             else:
                 genes.append(random.uniform(V_MIN, V_MAX))
-            genes.append((base_bearing + random.uniform(-45, 45)) % 360)
+            genes.append((base_bearing + random.uniform(-30, 30)) % 360)
         return creator.Individual(genes)
 
+    # toolbox에 개체와 인구 생성 등록
+    # tools.initRepeat은 toolbox.individual 함수를 반복 호출하여 리스트 형태의 인구 생성
     toolbox.register("individual", init_individual)
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
     # ── 병렬 / 순차 분기 ──
+    # n_workers가 0이면 시스템의 CPU 코어 수를 자동으로 감지하여 사용
     if n_workers == 0:
         n_workers = multiprocessing.cpu_count()
 
     pool = None
 
+    # 병렬 모드에서는 multiprocessing.Pool을 생성하여 워커 프로세스 초기화 함수를 지정하고, toolbox의 map과 evaluate 함수를 병렬 버전으로 등록
     if n_workers > 1:
-        if verbose:
-            print(f"  ⚡ Multiprocessing: {n_workers} workers")
+        print(f"  ⚡ Multiprocessing: {n_workers} workers")
 
         pool = multiprocessing.Pool(
             processes=n_workers,
@@ -435,8 +468,7 @@ def setup_ga(
         toolbox.register("map", pool.map)
         toolbox.register("evaluate", _evaluate_parallel)
     else:
-        if verbose:
-            print("  Sequential mode (1 worker)")
+        print(f"  Sequential mode (1 worker)")
         import functools
         toolbox.register(
             "evaluate",
@@ -453,7 +485,9 @@ def setup_ga(
     # 유전자별 상·하한: 첫 구간(출항)은 감속 범위
     low_bounds = [V_MIN_PORT, 0.0] + [V_MIN, 0.0] * (n_free - 1)
     up_bounds = [V_MAX_PORT, 360.0] + [V_MAX, 360.0] * (n_free - 1)
-
+    
+    # Simulated Binary Crossover (SBX)와 Polynomial Mutation을 경계 내에서 적용하도록 DEAP의 도구 등록
+    # eta는 분포 지수, indpb는 각 유전자별 변이 확률 (여기서는 1/n_genes로 설정하여 평균적으로 한 개의 유전자 변이)
     toolbox.register("mate", tools.cxSimulatedBinaryBounded,
                      low=low_bounds,
                      up=up_bounds,
@@ -463,30 +497,34 @@ def setup_ga(
                      low=low_bounds,
                      up=up_bounds,
                      eta=20.0,
-                     indpb=1.0 / n_genes)
+                     indpb=1.0 / n_genes) # 각 유전자별 변이 확률
 
+    # select 함수는 tool.selTournament으로 등록하여 토너먼트 선택 방식 사용, tournament_size는 토너먼트 크기
     toolbox.register("select", tools.selTournament, tournsize=tournament_size)
 
+    # Hall of Fame은 최상의 5개 개체를 저장하도록 설정(명예의 전당쓰)
     hof = tools.HallOfFame(5)
 
+    # GA 실행 로그 기록을 위해 각 Generation마다 최소, 평균, 최대 적합도 기록하도록 Statistics 객체 생성
     stats = tools.Statistics(lambda ind: ind.fitness.values[0])
     stats.register("min", np.min)
     stats.register("avg", np.mean)
     stats.register("max", np.max)
 
     # ── 실행 ──
-    if verbose:
-        print(f"\n{'='*60}")
-        print(" DEAP GA 실행")
-        print(f" 인구: {pop_size} | 세대: {n_gen} | 구간: {n_segments}")
-        print(f" RTA: {RTA_HOURS}h | 속도: {V_MIN}~{V_MAX} kts")
-        print(f" 기본 방위: {base_bearing:.1f}°")
-        if n_workers > 1:
-            print(f" 병렬: {n_workers} 코어")
-        print(f"{'='*60}")
+    print(f"\n{'='*60}")
+    print(f" DEAP GA 실행")
+    print(f" 인구: {pop_size} | 세대: {n_gen} | 구간: {n_segments}")
+    print(f" RTA: {RTA_HOURS}h | 속도: {V_MIN}~{V_MAX} kts")
+    print(f" 기본 방위: {base_bearing:.1f}°")
+    if n_workers > 1:
+        print(f" 병렬: {n_workers} 코어")
+    print(f"{'='*60}")
 
+    # 초기 population 생성
     pop = toolbox.population(n=pop_size)
 
+    # GA 실행: eaSimple은 선택, 교차, 변이 과정을 반복하여 세대를 진화시키는 DEAP의 기본 알고리즘 함수
     try:
         result_pop, logbook = algorithms.eaSimple(
             pop, toolbox,
@@ -495,13 +533,15 @@ def setup_ga(
             ngen=n_gen,
             stats=stats,
             halloffame=hof,
-            verbose=verbose,
+            verbose=True,
         )
     finally:
+        # 워커 프로세스 종료 (병렬 프로세스)
         if pool is not None:
             pool.close()
             pool.join()
 
+    # 최종 결과 Hall of Fame에서 최상의 개체를 추출하여 디코딩, 최적 경로와 적합도 반환
     best_ind = hof[0]
     best_route = decode_route(list(best_ind), n_segments)
 
