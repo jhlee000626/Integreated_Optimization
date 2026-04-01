@@ -156,7 +156,7 @@ def main():
     plot_optimal_route(route, cmap, save_dir=OUTPUT_DIR)
     plot_convergence(ga_result["logbook"], save_dir=OUTPUT_DIR)
     if milp_detail["feasible"]:
-        plot_power_schedule(milp_detail, save_dir=OUTPUT_DIR)
+        plot_power_schedule(milp_detail, power_profile=power_profile, save_dir=OUTPUT_DIR)
 
     print(f"\n  Total elapsed: {elapsed:.1f} sec")
     print(f"  Output: {OUTPUT_DIR}/")

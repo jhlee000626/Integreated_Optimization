@@ -68,9 +68,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n-segments", type=int, default=N_SEGMENTS, help="Common segment count.")
     parser.add_argument("--rta-h", type=float, default=RTA_HOURS, help="Common voyage RTA in hours.")
-    parser.add_argument("--ga-pop-size", type=int, default=20, help="GA population size for cases 2 and 3.")
-    parser.add_argument("--ga-n-gen", type=int, default=10, help="GA generation count for cases 2 and 3.")
-    parser.add_argument("--ga-workers", type=int, default=1, help="GA worker count.")
+    parser.add_argument("--ga-pop-size", type=int, default=100, help="GA population size for cases 2 and 3.")
+    parser.add_argument("--ga-n-gen", type=int, default=100, help="GA generation count for cases 2 and 3.")
+    parser.add_argument("--ga-workers", type=int, default=0, help="GA worker count.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for GA cases. Use None for random initialization.")
     parser.add_argument(
         "--ga-cost-resolution",

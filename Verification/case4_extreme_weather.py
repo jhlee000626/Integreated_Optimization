@@ -54,7 +54,7 @@ def main():
     )
 
     route = ga_result["best_route"]
-    _, _, milp_result = solve_route_schedule(route, env_fn, departure_time_utc, initial_soc=0.7)
+    _, power_profile, milp_result = solve_route_schedule(route, env_fn, departure_time_utc, initial_soc=0.7)
 
     print(f"  Best fitness: {ga_result['best_fitness']:.2f} kg")
     print(
@@ -76,7 +76,7 @@ def main():
     plot_weather_map(env_fn, cost_map, route_wps=route["waypoints"], save_dir=out_dir, when_utc=departure_time_utc)
     plot_convergence(ga_result["logbook"], save_dir=out_dir)
     if milp_result["feasible"]:
-        plot_power_schedule(milp_result, save_dir=out_dir)
+        plot_power_schedule(milp_result, power_profile=power_profile, save_dir=out_dir)
 
 
 if __name__ == "__main__":

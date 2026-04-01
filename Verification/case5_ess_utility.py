@@ -81,9 +81,9 @@ def main():
         plot_convergence(ga_result["logbook"], save_dir=out_dir)
 
         if result_with_soc["feasible"]:
-            plot_power_schedule(result_with_soc, save_dir=os.path.join(out_dir, "with_soc"))
+            plot_power_schedule(result_with_soc, power_profile=power_profile, save_dir=os.path.join(out_dir, "with_soc"))
         if result_empty_soc["feasible"]:
-            plot_power_schedule(result_empty_soc, save_dir=os.path.join(out_dir, "empty_soc"))
+            plot_power_schedule(result_empty_soc, power_profile=power_profile, save_dir=os.path.join(out_dir, "empty_soc"))
     finally:
         del env_loader
 

@@ -158,6 +158,7 @@ def plot_convergence(logbook, save_dir: str = "output"):
 
 def plot_power_schedule(
     milp_result: dict,
+    power_profile: list[dict] | None = None,
     save_dir: str = "output",
 ):
     """구간별 전력 스케줄 (DG + ESS)."""
@@ -165,7 +166,13 @@ def plot_power_schedule(
 
     schedule = milp_result["schedule"]
     T = len(schedule)
+    if T == 0:
+        return
+
     t_arr = np.arange(T)
+    sog_profile = []
+    if power_profile is not None:
+        sog_profile = [float(step["speed_sog_kts"]) for step in power_profile[:T]]
 
     fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
 
@@ -175,16 +182,40 @@ def plot_power_schedule(
     DG1 = [s["DG1_P_MW"] for s in schedule]
     DG2 = [s["DG2_P_MW"] for s in schedule]
     DG3 = [s["DG3_P_MW"] for s in schedule]
+    P_dc = [s["P_dc_MW"] for s in schedule]
+    P_c_signed = [-s["P_c_MW"] for s in schedule]
+    P_c = [s["P_c_MW"] for s in schedule]
+    DG_total = [a + b + c for a, b, c in zip(DG1, DG2, DG3)]
 
     ax.bar(t_arr, DG1, color='#E53935', alpha=0.8, label='DG1')
     ax.bar(t_arr, DG2, bottom=DG1, color='#1E88E5', alpha=0.8, label='DG2')
     dg12 = [a + b for a, b in zip(DG1, DG2)]
     ax.bar(t_arr, DG3, bottom=dg12, color='#43A047', alpha=0.8, label='DG3')
+    ax.bar(t_arr, P_dc, bottom=DG_total, color='#FB8C00', alpha=0.75, label='ESS discharge')
+    ax.bar(t_arr, [-value for value in P_c], color='#29B6F6', alpha=0.75, label='ESS charge')
     ax.plot(t_arr, P_req, 'ko-', markersize=4, linewidth=1.5, label='P_req')
     ax.set_ylabel("Power (MW)", fontsize=11)
-    ax.set_title("DG Output vs Required Load", fontsize=12, fontweight='bold')
-    ax.legend(fontsize=9, ncol=4)
+    ax.set_title("DG + ESS Output vs Required Load", fontsize=12, fontweight='bold')
     ax.grid(True, alpha=0.3)
+
+    speed_ax = ax.twinx()
+    if sog_profile:
+        speed_ax.plot(
+            t_arr[:len(sog_profile)],
+            sog_profile,
+            color='#8E24AA',
+            linestyle='--',
+            marker='o',
+            markersize=3,
+            linewidth=1.4,
+            label='SOG',
+        )
+        speed_ax.set_ylabel("Speed (kts)", fontsize=11, color='#8E24AA')
+        speed_ax.tick_params(axis='y', colors='#8E24AA')
+
+    handles, labels = ax.get_legend_handles_labels()
+    speed_handles, speed_labels = speed_ax.get_legend_handles_labels()
+    ax.legend(handles + speed_handles, labels + speed_labels, fontsize=9, ncol=4)
 
     # ── (b) ESS 충방전 ──
     ax = axes[1]
@@ -192,7 +223,7 @@ def plot_power_schedule(
     P_c = [-s["P_c_MW"] for s in schedule]  # 충전은 음수 표시
     colors = ['#FF7043' if v > 0 else '#42A5F5' for v in [d + c for d, c in zip(P_dc, P_c)]]
     ax.bar(t_arr, P_dc, color='#FF7043', alpha=0.8, label='Discharge')
-    ax.bar(t_arr, P_c, color='#42A5F5', alpha=0.8, label='Charge')
+    ax.bar(t_arr, P_c_signed, color='#42A5F5', alpha=0.8, label='Charge')
     ax.axhline(0, color='black', linewidth=0.5)
     ax.set_ylabel("ESS Power (MW)", fontsize=11)
     ax.set_title("ESS Charge/Discharge", fontsize=12, fontweight='bold')

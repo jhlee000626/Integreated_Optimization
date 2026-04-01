@@ -145,7 +145,7 @@ def main():
             when_utc=departure_time_utc,
         )
         if milp_result["feasible"]:
-            plot_power_schedule(milp_result, save_dir=out_dir)
+            plot_power_schedule(milp_result, power_profile=power_profile, save_dir=out_dir)
     finally:
         del env_loader
 

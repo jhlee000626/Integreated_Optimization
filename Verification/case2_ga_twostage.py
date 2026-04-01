@@ -86,7 +86,7 @@ def main():
         plot_weather_map(env_fn, cost_map, route_wps=route["waypoints"], save_dir=out_dir, when_utc=departure_time_utc)
         plot_convergence(ga_result["logbook"], save_dir=out_dir)
         if milp_result["feasible"]:
-            plot_power_schedule(milp_result, save_dir=out_dir)
+            plot_power_schedule(milp_result, power_profile=power_profile, save_dir=out_dir)
     finally:
         del env_loader
 

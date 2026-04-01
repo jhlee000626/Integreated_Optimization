@@ -18,6 +18,13 @@ _PROPULSION_HELPER = PropulsionHelper()
 MAX_PROPULSION_LOAD_KW = 36000.0
 
 
+def wind_speed_to_beaufort(v_wind_ms: float) -> int:
+    for bn, upper in enumerate((0.2, 1.5, 3.3, 5.4, 7.9, 10.7, 13.8, 17.1, 20.7, 24.4, 28.4, 32.6, 36.9)):
+        if v_wind_ms <= upper:
+            return bn
+    return 12
+
+
 def _relative_wind_speed_from_encounter(
     v_ship_knots: float,
     v_wind_ms: float,
