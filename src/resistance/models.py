@@ -4,7 +4,7 @@ Shared data models for resistance and propulsion calculations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Mapping
 
 
@@ -104,5 +104,3 @@ class PropulsionResult:
     v_ideal: float
     eta_d: float
     eta_o: float
-    kt_coeffs: tuple[float, float, float] = field(default_factory=lambda: (0.0, 0.0, 0.0))
-    kq_coeffs: tuple[float, float, float] = field(default_factory=lambda: (0.0, 0.0, 0.0))

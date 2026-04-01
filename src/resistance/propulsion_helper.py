@@ -54,8 +54,7 @@ class PropulsionHelper:
         kq_coeffs = KQ_COEFFS
 
         v_c = v_knots * 0.514444
-        v_design = ship.DesignSpeed * 0.514444
-        if v_c < 0.1 or v_design < 0.1:
+        if v_c < 0.1:
             return PropulsionResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         total_resistance_n = res_data.total_resistance_n
@@ -98,6 +97,4 @@ class PropulsionHelper:
             v_ideal=v_id,
             eta_d=eta_d,
             eta_o=eta_o,
-            kt_coeffs=kt_coeffs,
-            kq_coeffs=kq_coeffs,
         )

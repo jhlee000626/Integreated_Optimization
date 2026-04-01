@@ -51,9 +51,9 @@ def main():
             departure_time_utc=departure_time_utc,
             n_segments=N_SEGMENTS,
             rta_h=RTA_HOURS,
-            pop_size=60,
-            n_gen=60,
-            seed=None,
+            pop_size=100,
+            n_gen=100,
+            seed=42,
             n_workers=1,
             smoothing_weight=0.0,
         )

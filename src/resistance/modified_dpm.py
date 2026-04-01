@@ -15,29 +15,8 @@ from src.ship.kcs_specs import KCS_ISO15016
 
 _RESISTANCE_ESTIMATOR = ResistanceEstimator()
 _PROPULSION_HELPER = PropulsionHelper()
+MAX_PROPULSION_LOAD_KW = 36000.0
 
-_BN_UPPER_BOUNDS = [
-    0.2,
-    1.5,
-    3.3,
-    5.4,
-    7.9,
-    10.7,
-    13.8,
-    17.1,
-    20.7,
-    24.4,
-    28.4,
-    32.6,
-    36.9,
-]
-
-
-def wind_speed_to_beaufort(v_wind_ms: float) -> int:
-    for bn, upper in enumerate(_BN_UPPER_BOUNDS):
-        if v_wind_ms <= upper:
-            return bn
-    return 12
 
 def _relative_wind_speed_from_encounter(
     v_ship_knots: float,
@@ -150,8 +129,10 @@ class ModifiedDPMCalculator:
             ship=ship,
         )
 
-        pd_kw = propulsion.power_kw
-        bhp_kw = pd_kw / eta_drive if eta_drive > 1e-9 else pd_kw
+        pd_kw_raw = propulsion.power_kw
+        bhp_kw_raw = pd_kw_raw / eta_drive if eta_drive > 1e-9 else pd_kw_raw
+        bhp_kw = min(bhp_kw_raw, MAX_PROPULSION_LOAD_KW)
+        pd_kw = bhp_kw * eta_drive if eta_drive > 1e-9 else bhp_kw
         p_prop = bhp_kw / 1000.0
         p_req = p_prop + p_service
 
@@ -163,6 +144,8 @@ class ModifiedDPMCalculator:
             "P_req": p_req,
             "PD_kW": pd_kw,
             "BHP_kW": bhp_kw,
+            "PD_kW_raw": pd_kw_raw,
+            "BHP_kW_raw": bhp_kw_raw,
             "total_resistance_N": resistance.total_resistance_n,
             "R_calm_N": resistance.calm_resistance_n,
             "R_wind_N": resistance.wind_resistance_n,
@@ -179,7 +162,6 @@ class ModifiedDPMCalculator:
             "V_ideal_ms": propulsion.v_ideal,
             "relative_wind_speed_ms": resistance.relative_wind_speed_ms,
             "relative_wind_dir_deg": resistance.relative_wind_dir_deg,
-            "BN": wind_speed_to_beaufort(beaufort_wind_speed),
             "a2": 1.0,
             "L_percent": 0.0,
         }
