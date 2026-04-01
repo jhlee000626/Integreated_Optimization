@@ -15,7 +15,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from Verification.common import ensure_output_dir, load_marine_environment, make_milp_solver
+from Verification.common import VERIFICATION_COST_MAP_RESOLUTION, ensure_output_dir, load_marine_environment, make_milp_solver
 from src.grid.cost_map import build_cost_map
 from src.optimizer.ga_engine import N_SEGMENTS, RTA_HOURS, build_required_power_profile, setup_ga
 from src.visualization.plotter import plot_convergence, plot_optimal_route, plot_power_schedule, plot_weather_map
@@ -29,7 +29,7 @@ def main():
     out_dir = ensure_output_dir("case5")
     env_loader, env_fn, departure_time_utc = load_marine_environment()
     try:
-        cost_map = build_cost_map(resolution=0.005)
+        cost_map = build_cost_map(resolution=VERIFICATION_COST_MAP_RESOLUTION)
         ga_result = setup_ga(
             cost_map=cost_map,
             milp_solver=make_milp_solver(),
@@ -59,6 +59,15 @@ def main():
         result_empty_soc = milp_empty_soc.solve(P_req=p_req, dt=dt, initial_SOC=0.0, msg=False)
 
         print(f"  Best integrated fitness: {ga_result['best_fitness']:.2f} kg")
+        print(
+            "  Route validity: "
+            f"overall={route['valid']} "
+            f"departure={route['valid_departure_heading']} "
+            f"turning={route['valid_turning']} "
+            f"last_speed={route['valid_speed']} "
+            f"last_heading={route['valid_heading']}"
+        )
+        print(f"  Land violation: {route['land_violation']:.1f}")
         print(f"  With initial SOC=0.7 feasible: {result_with_soc['feasible']}")
         print(f"  With initial SOC=0.0 feasible: {result_empty_soc['feasible']}")
         if result_with_soc["feasible"]:

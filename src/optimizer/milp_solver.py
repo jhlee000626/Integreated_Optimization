@@ -5,7 +5,8 @@ MILP 발전기 + ESS 스케줄링 솔버 (PuLP + CBC)
 
 수학적 구조:
     - 목적함수: min Σ_t [ Σ_i FC_i(P_it)·Δt + C_start_i·y_it ]
-    - FC_i(P) = α₁P² + α₂P + α₃ → PWL 근사 (PuLP는 LP/MILP만 지원)
+    - SFOC_i(P) = α₁P² + α₂P + α₃ (g/kWh)
+    - FC_i(P) = SFOC_i(P) · P(MW) (kg/h) → PWL 근사
     - 모든 P_req는 GA에서 상수로 전달 → MILP 내부 완전 선형
 
 의존성: pip install pulp
@@ -36,7 +37,7 @@ class SafeCPLEX_CMD(CPLEX_CMD):
 
 def load_sfoc(json_path: str) -> Dict:
     """
-    SFOC JSON 파일 로드. FC(P) = α₁P² + α₂P + α₃ (kg/h)
+    SFOC JSON 파일 로드. SFOC(P) = α₁P² + α₂P + α₃ (g/kWh)
     """
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -45,9 +46,25 @@ def load_sfoc(json_path: str) -> Dict:
 # SFOC 함수 PWL 근사
 def fuel_consumption(P: float, alpha1: float, alpha2: float, alpha3: float) -> float:
     """
-    이차 연료 소비 함수. FC(P) = α₁P² + α₂P + α₃ (kg/h)
+    연료 소비율 계산.
+
+    Parameters
+    ----------
+    P : float
+        DG 출력 (MW)
+
+    Returns
+    -------
+    float
+        연료 소비율 (kg/h)
+
+    Notes
+    -----
+    SFOC 곡선 계수는 g/kWh 기준이다.
+    따라서 SFOC(P)[g/kWh] * P[MW] = kg/h 가 된다.
     """
-    return alpha1 * P ** 2 + alpha2 * P + alpha3
+    sfoc_g_per_kwh = alpha1 * P ** 2 + alpha2 * P + alpha3
+    return sfoc_g_per_kwh * P
 # PWL (Piecewise Linear) 근사
 # =============================================================================
 
@@ -65,7 +82,7 @@ def generate_pwl_breakpoints(
     Returns
     -------
     list of (P, FC) tuples
-        각 breakpoint에서의 출력(MW) 및 연료 소비(kg/h)
+        각 breakpoint에서의 출력(MW) 및 연료 소비율(kg/h)
     """
     breakpoints = []
     for k in range(n_segments + 1):

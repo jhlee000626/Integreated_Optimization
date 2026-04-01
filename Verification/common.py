@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 from typing import Callable, Tuple
 
-from src.optimizer.ga_engine import build_required_power_profile
+from src.optimizer.ga_engine import apply_route_validation, build_required_power_profile, evaluate_route_validity
 from src.optimizer.milp_solver import MILPSolver
 from src.weather import MarineEnvironmentLoader, resolve_marine_dataset_paths
 
@@ -16,6 +16,7 @@ from src.weather import MarineEnvironmentLoader, resolve_marine_dataset_paths
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SFOC_PATH = os.path.join(PROJECT_ROOT, "config", "sfoc.json")
 OUTPUT_ROOT = os.path.join(PROJECT_ROOT, "output", "verification")
+VERIFICATION_COST_MAP_RESOLUTION = 0.01
 
 
 def ensure_output_dir(case_name: str) -> str:
@@ -54,3 +55,19 @@ def solve_route_schedule(
         msg=False,
     )
     return milp, power_profile, result
+
+
+def validate_route(
+    route: dict,
+    cost_map,
+    env_fn: Callable,
+    departure_time_utc: datetime,
+):
+    validation = evaluate_route_validity(
+        route,
+        cost_map=cost_map,
+        env_fn=env_fn,
+        departure_time_utc=departure_time_utc,
+    )
+    apply_route_validation(route, validation)
+    return validation

@@ -224,7 +224,8 @@ def plot_weather_map(
     weather_fn,
     cost_map,
     route_wps=None,
-    save_dir: str = "output"
+    save_dir: str = "output",
+    when_utc=None,
 ):
     """
     풍속/풍향을 바탕으로 Beaufort Number(BN) 맵 오버레이 시각화.
@@ -233,8 +234,25 @@ def plot_weather_map(
     import numpy as np
     import matplotlib.pyplot as plt
     import matplotlib.patheffects as patheffects
+    from datetime import datetime, timezone
     from src.resistance.modified_dpm import wind_speed_to_beaufort
+    from src.resistance.models import EnvironmentData
     from src.grid.no_go_zone import BUSAN_PORT, JEJU_PORT
+
+    if when_utc is None:
+        when_utc = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+    def resolve_wind(lat, lon):
+        try:
+            value = weather_fn(lat, lon, when_utc)
+        except TypeError:
+            value = weather_fn(lat, lon)
+
+        if isinstance(value, EnvironmentData):
+            return float(value.wind_speed_ms), float(value.wind_dir_deg or 0.0)
+        if isinstance(value, tuple) and len(value) == 2:
+            return float(value[0]), float(value[1])
+        raise TypeError("plot_weather_map expects env_fn(lat, lon, when_utc) or weather_fn(lat, lon).")
 
     os.makedirs(save_dir, exist_ok=True)
     fig, ax = plt.subplots(figsize=(14, 12))
@@ -253,7 +271,7 @@ def plot_weather_map(
     for i in range(len(cost_map.lats)):
         for j in range(len(cost_map.lons)):
             lat, lon = cost_map.lats[i], cost_map.lons[j]
-            ws, wd = weather_fn(lat, lon)
+            ws, wd = resolve_wind(lat, lon)
             bn_grid[i, j] = wind_speed_to_beaufort(ws)
             
             # 기상학적 풍향: 바람이 불어오는 방향 (0 = N, 90 = E)

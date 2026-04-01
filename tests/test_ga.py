@@ -115,15 +115,16 @@ def main():
         "  Route validity: "
         f"overall={route['valid']} "
         f"departure={route['valid_departure_heading']} "
+        f"turning={route['valid_turning']} "
         f"last_speed={route['valid_speed']} "
         f"last_heading={route['valid_heading']}"
     )
-    print(f"  Land violation: {compute_violation(route, cmap):.1f}")
-    print(f"  Last speed: {route['last_speed']:.2f} kts")
+    print(f"  Land violation: {route['land_violation']:.1f}")
+    print(f"  Last STW: {route['last_speed']:.2f} kts | Last SOG: {route['last_speed_sog']:.2f} kts")
     print(f"  Final heading delta: {route['final_heading_delta']:.2f} deg")
 
     print("\n  Segments:")
-    print(f"  {'Seg':>4s} {'V(kts)':>8s} {'hdg(deg)':>9s} {'dist(nm)':>9s} {'lat':>8s} {'lon':>9s}")
+    print(f"  {'Seg':>4s} {'SOG':>8s} {'hdg(deg)':>9s} {'dist(nm)':>9s} {'lat':>8s} {'lon':>9s}")
     print(f"  {'-' * 57}")
     for i in range(len(route["speeds"])):
         wp = route["waypoints"][i]

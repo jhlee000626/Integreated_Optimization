@@ -80,6 +80,10 @@ def _weighted_mean(values: list[tuple[float, float]]) -> float:
     return sum(weight * value for weight, value in valid) / total_weight
 
 
+def _finite_or_default(value: float, default: float = 0.0) -> float:
+    return float(value) if math.isfinite(value) else float(default)
+
+
 def _bilinear(field_2d: np.ndarray, lats: np.ndarray, lons: np.ndarray, lat: float, lon: float) -> float:
     lat0, lat1, lat_w = _interp_bounds(lats, lat)
     lon0, lon1, lon_w = _interp_bounds(lons, lon)
@@ -282,20 +286,28 @@ class MarineEnvironmentLoader:
         uo = self._sample_field(self._uo, self._cmems_lats, self._cmems_lons, lat, lon, when_utc)
         vo = self._sample_field(self._vo, self._cmems_lats, self._cmems_lons, lat, lon, when_utc)
 
-        wind_speed_ms = math.hypot(u10, v10)
-        wind_dir_deg = (270.0 - math.degrees(math.atan2(v10, u10))) % 360.0
+        if math.isfinite(u10) and math.isfinite(v10):
+            wind_speed_ms = math.hypot(u10, v10)
+            wind_dir_deg = (270.0 - math.degrees(math.atan2(v10, u10))) % 360.0
+        else:
+            wind_speed_ms = 0.0
+            wind_dir_deg = 0.0
 
-        current_speed_ms = math.hypot(uo, vo)
-        current_dir_deg = (90.0 - math.degrees(math.atan2(vo, uo))) % 360.0
+        if math.isfinite(uo) and math.isfinite(vo):
+            current_speed_ms = math.hypot(uo, vo)
+            current_dir_deg = (90.0 - math.degrees(math.atan2(vo, uo))) % 360.0
+        else:
+            current_speed_ms = 0.0
+            current_dir_deg = 0.0
 
         return EnvironmentData(
-            wind_speed_ms=wind_speed_ms,
-            wind_dir_deg=wind_dir_deg,
-            current_speed_ms=current_speed_ms,
-            current_dir_deg=current_dir_deg,
-            wave_height_m=max(0.0, swh),
-            wave_period_s=max(0.0, mwp),
-            wave_dir_deg=mwd,
+            wind_speed_ms=_finite_or_default(wind_speed_ms, 0.0),
+            wind_dir_deg=_finite_or_default(wind_dir_deg, 0.0),
+            current_speed_ms=_finite_or_default(current_speed_ms, 0.0),
+            current_dir_deg=_finite_or_default(current_dir_deg, 0.0),
+            wave_height_m=max(0.0, _finite_or_default(swh, 0.0)),
+            wave_period_s=max(0.0, _finite_or_default(mwp, 0.0)),
+            wave_dir_deg=_finite_or_default(mwd, 0.0),
         )
 
 

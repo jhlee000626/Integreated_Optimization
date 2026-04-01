@@ -1,4 +1,6 @@
-"""ISO 15016 + reverse-DPM propulsion load estimator."""
+"""
+ISO 15016 + reverse-DPM propulsion load estimator.
+"""
 
 from __future__ import annotations
 
@@ -32,12 +34,10 @@ _BN_UPPER_BOUNDS = [
 
 
 def wind_speed_to_beaufort(v_wind_ms: float) -> int:
-    """Map wind speed in m/s to the WMO Beaufort number."""
     for bn, upper in enumerate(_BN_UPPER_BOUNDS):
         if v_wind_ms <= upper:
             return bn
     return 12
-
 
 def _relative_wind_speed_from_encounter(
     v_ship_knots: float,
@@ -120,24 +120,23 @@ class ModifiedDPMCalculator:
                     wave_period_s=wave_period_s,
                     wave_dir_deg=wave_dir_deg,
                 )
-        else:
-            if env.wind_dir_deg is None and env.rel_wind_speed_ms is None:
-                env = EnvironmentData(
-                    wind_speed_ms=v_wind_ms,
-                    wind_dir_deg=None,
+        elif env.wind_dir_deg is None and env.rel_wind_speed_ms is None:
+            env = EnvironmentData(
+                wind_speed_ms=v_wind_ms,
+                wind_dir_deg=None,
+                current_speed_ms=env.current_speed_ms,
+                current_dir_deg=env.current_dir_deg,
+                wave_height_m=env.wave_height_m,
+                wave_period_s=env.wave_period_s,
+                wave_dir_deg=env.wave_dir_deg,
+                rel_wind_speed_ms=_relative_wind_speed_from_encounter(
+                    v_ship_knots=v_ship_knots,
+                    v_wind_ms=v_wind_ms,
+                    encounter_angle_deg=encounter_angle_deg,
                     current_speed_ms=env.current_speed_ms,
-                    current_dir_deg=env.current_dir_deg,
-                    wave_height_m=env.wave_height_m,
-                    wave_period_s=env.wave_period_s,
-                    wave_dir_deg=env.wave_dir_deg,
-                    rel_wind_speed_ms=_relative_wind_speed_from_encounter(
-                        v_ship_knots=v_ship_knots,
-                        v_wind_ms=v_wind_ms,
-                        encounter_angle_deg=encounter_angle_deg,
-                        current_speed_ms=env.current_speed_ms,
-                    ),
-                    rel_wind_dir_deg=abs(encounter_angle_deg),
-                )
+                ),
+                rel_wind_dir_deg=abs(encounter_angle_deg),
+            )
 
         resistance = self.resistance_estimator.estimate_resistance(
             ship=ship,

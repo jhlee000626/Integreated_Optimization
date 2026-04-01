@@ -14,7 +14,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from Verification.common import ensure_output_dir, load_marine_environment, make_milp_solver, solve_route_schedule
+from Verification.common import (
+    VERIFICATION_COST_MAP_RESOLUTION,
+    ensure_output_dir,
+    load_marine_environment,
+    make_milp_solver,
+    solve_route_schedule,
+)
 from src.grid.cost_map import build_cost_map
 from src.optimizer.ga_engine import N_SEGMENTS, RTA_HOURS, setup_ga
 from src.visualization.plotter import plot_convergence, plot_optimal_route, plot_power_schedule, plot_weather_map
@@ -28,7 +34,7 @@ def main():
     out_dir = ensure_output_dir("case3")
     env_loader, env_fn, departure_time_utc = load_marine_environment()
     try:
-        cost_map = build_cost_map(resolution=0.005)
+        cost_map = build_cost_map(resolution=VERIFICATION_COST_MAP_RESOLUTION)
         milp = make_milp_solver()
         ga_result = setup_ga(
             cost_map=cost_map,
@@ -47,7 +53,16 @@ def main():
         _, _, milp_result = solve_route_schedule(route, env_fn, departure_time_utc, initial_soc=0.7)
 
         print(f"  Best fitness: {ga_result['best_fitness']:.2f} kg")
-        print(f"  Final last speed: {route['last_speed']:.2f} kts")
+        print(
+            "  Route validity: "
+            f"overall={route['valid']} "
+            f"departure={route['valid_departure_heading']} "
+            f"turning={route['valid_turning']} "
+            f"last_speed={route['valid_speed']} "
+            f"last_heading={route['valid_heading']}"
+        )
+        print(f"  Land violation: {route['land_violation']:.1f}")
+        print(f"  Final last STW: {route['last_speed']:.2f} kts | Last SOG: {route['last_speed_sog']:.2f} kts")
         if milp_result["feasible"]:
             print(f"  Recomputed MILP fuel: {milp_result['total_fuel_kg']:.2f} kg")
         else:

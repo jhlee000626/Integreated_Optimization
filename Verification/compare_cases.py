@@ -15,30 +15,32 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import os
 import sys
 from dataclasses import asdict, dataclass
 
-import networkx as nx
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from Verification.case1_astar_fixed import build_astar_graph, get_closest_node, interpolate_path
+from Verification.case1_astar_fixed import build_fixed_route
 from Verification.case2_ga_twostage import EnergyObjectiveSolver
-from Verification.common import ensure_output_dir, load_marine_environment, make_milp_solver, solve_route_schedule
+from Verification.common import (
+    VERIFICATION_COST_MAP_RESOLUTION,
+    ensure_output_dir,
+    load_marine_environment,
+    make_milp_solver,
+    solve_route_schedule,
+    validate_route,
+)
 from src.grid.cost_map import build_cost_map
+from src.grid.pathfinding import build_astar_route_points
 from src.grid.no_go_zone import BUSAN_PORT, JEJU_PORT
 from src.optimizer.ga_engine import (
     N_SEGMENTS,
     RTA_HOURS,
-    build_required_power_profile,
-    compute_heading,
-    compute_violation,
-    haversine_nm,
     setup_ga,
 )
 
@@ -73,63 +75,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ga-cost-resolution",
         type=float,
-        default=0.01,
+        default=VERIFICATION_COST_MAP_RESOLUTION,
         help="Cost-map resolution for GA cases.",
     )
     parser.add_argument(
         "--astar-cost-resolution",
         type=float,
-        default=0.1,
+        default=VERIFICATION_COST_MAP_RESOLUTION,
         help="Cost-map resolution for the A* baseline.",
     )
     return parser
-
-
-def _build_fixed_route(waypoints: list[tuple[float, float]], base_speed_knots: float, n_segments: int, rta_h: float) -> dict:
-    dt_h = rta_h / n_segments
-    route = {
-        "waypoints": waypoints,
-        "speeds": [],
-        "headings": [],
-        "delta_headings": [],
-        "dt": [dt_h] * n_segments,
-        "distances_nm": [],
-        "valid": True,
-        "valid_departure_heading": True,
-        "valid_speed": True,
-        "valid_heading": True,
-        "last_speed": 0.0,
-        "final_heading_delta": 0.0,
-    }
-
-    prev_heading = compute_heading(BUSAN_PORT, JEJU_PORT)
-    for idx in range(n_segments):
-        wp_from = waypoints[idx]
-        wp_to = waypoints[idx + 1]
-        heading = compute_heading(wp_from, wp_to)
-        speed = base_speed_knots * 0.7 if idx == 0 or idx == n_segments - 1 else base_speed_knots
-        delta = ((heading - prev_heading + 180.0) % 360.0) - 180.0
-
-        route["speeds"].append(speed)
-        route["headings"].append(heading)
-        route["delta_headings"].append(delta)
-        route["distances_nm"].append(haversine_nm(wp_from, wp_to))
-        prev_heading = heading
-
-    route["last_speed"] = route["speeds"][-1]
-    route["final_heading_delta"] = route["delta_headings"][-1]
-    route["nodes"] = [
-        {
-            "lat": wp[0],
-            "lon": wp[1],
-            "time_h": idx * dt_h,
-            "time_utc": None,
-            "speed_out_kts": route["speeds"][idx] if idx < n_segments else None,
-            "heading_out_deg": route["headings"][idx] if idx < n_segments else None,
-        }
-        for idx, wp in enumerate(route["waypoints"])
-    ]
-    return route
 
 
 def _summarize_case(
@@ -168,28 +123,13 @@ def _summarize_case(
 
 def _run_case1(env_fn, departure_time_utc, n_segments: int, rta_h: float, astar_cost_resolution: float) -> CaseMetrics:
     cost_map = build_cost_map(resolution=astar_cost_resolution)
-    graph = build_astar_graph(cost_map)
-    start_node = get_closest_node(cost_map, BUSAN_PORT, graph)
-    goal_node = get_closest_node(cost_map, JEJU_PORT, graph)
-
-    def heuristic(node_a, node_b):
-        return math.hypot(node_b[0] - node_a[0], node_b[1] - node_a[1]) * cost_map.resolution
-
-    path_idx = nx.astar_path(graph, start_node, goal_node, heuristic=heuristic, weight="weight")
-    raw_path = [(cost_map.lats[i], cost_map.lons[j]) for i, j in path_idx]
-    waypoints, total_dist_nm = interpolate_path(raw_path, n_segments)
+    _, waypoints, total_dist_nm = build_astar_route_points(cost_map, BUSAN_PORT, JEJU_PORT, n_segments)
     dt_h = rta_h / n_segments
     base_speed = total_dist_nm / (dt_h * (n_segments - 0.6))
 
-    route = _build_fixed_route(waypoints, base_speed, n_segments=n_segments, rta_h=rta_h)
-    power_profile = build_required_power_profile(route, env_fn=env_fn, departure_time_utc=departure_time_utc)
-    milp = make_milp_solver()
-    milp_result = milp.solve(
-        P_req=[segment["P_req"] for segment in power_profile],
-        dt=route["dt"],
-        initial_SOC=0.7,
-        msg=False,
-    )
+    route = build_fixed_route(waypoints, base_speed, n_segments=n_segments, rta_h=rta_h)
+    validation = validate_route(route, cost_map, env_fn, departure_time_utc)
+    _, power_profile, milp_result = solve_route_schedule(route, env_fn, departure_time_utc, initial_soc=0.7)
     return _summarize_case(
         "case1_astar_fixed",
         route,
@@ -197,7 +137,7 @@ def _run_case1(env_fn, departure_time_utc, n_segments: int, rta_h: float, astar_
         objective=milp_result["total_fuel_kg"] if milp_result["feasible"] else None,
         objective_kind="milp_fuel_kg",
         milp_result=milp_result,
-        route_violation=cost_map.route_violation(route["waypoints"]),
+        route_violation=validation.land_violation,
         note=f"astar_res={astar_cost_resolution}",
     )
 
@@ -235,7 +175,7 @@ def _run_case2(
         objective=ga_result["best_fitness"],
         objective_kind="energy_objective",
         milp_result=milp_result,
-        route_violation=compute_violation(route, cost_map),
+        route_violation=route["land_violation"],
         note=f"ga_res={ga_cost_resolution}",
     )
 
@@ -274,7 +214,7 @@ def _run_case3(
         objective=ga_result["best_fitness"],
         objective_kind="ga_objective",
         milp_result=milp_result,
-        route_violation=compute_violation(route, cost_map),
+        route_violation=route["land_violation"],
         note=f"ga_res={ga_cost_resolution}",
     )
 
