@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.optimizer.ga_engine import build_required_power_profile, compute_violation_penalty, decode_route
+from src.optimizer.ga_engine import build_required_power_profile, decode_route
 from src.resistance.models import EnvironmentData
 from src.resistance.modified_dpm import compute_P_req
 
@@ -61,7 +61,7 @@ def test_current_only_changes_v_sog_not_propulsion():
 
 
 def test_build_required_power_profile_uses_segment_start_nodes():
-    route = decode_route([10.0, 60.0, 10.0, 60.0], n_segments=3, rta_h=3.0)
+    route = decode_route([10.0, 60.0, 10.0, 0.0], n_segments=3, rta_h=3.0)
     departure_time_utc = datetime(2025, 3, 25, 0, 0, tzinfo=timezone.utc)
     calls = []
 
@@ -85,7 +85,7 @@ def test_build_required_power_profile_uses_segment_start_nodes():
 
 
 def test_decode_route_uses_sog_for_ground_track():
-    individual = [12.0, 90.0, 12.0, 90.0]
+    individual = [12.0, 90.0, 12.0, 0.0]
     route = decode_route(
         individual,
         n_segments=3,
@@ -96,10 +96,12 @@ def test_decode_route_uses_sog_for_ground_track():
     assert route["distances_nm"][1] == pytest.approx(12.0)
     assert route["speeds"][0] == pytest.approx(12.0)
     assert route["speeds_sog"][0] == pytest.approx(12.0)
+    assert route["headings"][0] == pytest.approx(90.0)
+    assert route["headings"][1] == pytest.approx(90.0)
 
 
 def test_build_required_power_profile_derives_stw_from_sog_and_current():
-    route = decode_route([12.0, 90.0, 12.0, 90.0], n_segments=3, rta_h=3.0)
+    route = decode_route([12.0, 90.0, 12.0, 0.0], n_segments=3, rta_h=3.0)
     departure_time_utc = datetime(2025, 3, 25, 0, 0, tzinfo=timezone.utc)
 
     def env_fn(lat, lon, when_utc):
@@ -119,8 +121,8 @@ def test_build_required_power_profile_derives_stw_from_sog_and_current():
     assert route["nodes"][0]["speed_through_water_kts"] == pytest.approx(expected_stw)
 
 
-def test_violation_penalty_scales_up_with_generation_progress():
-    early_penalty = compute_violation_penalty(severity=1.0, generation_progress=0.0)
-    late_penalty = compute_violation_penalty(severity=1.0, generation_progress=1.0)
+def test_decode_route_uses_first_absolute_then_delta_heading():
+    route = decode_route([12.0, 180.0, 12.0, 10.0], n_segments=3, rta_h=3.0)
 
-    assert early_penalty < late_penalty
+    assert route["headings"][0] == pytest.approx(180.0)
+    assert route["headings"][1] == pytest.approx(190.0)

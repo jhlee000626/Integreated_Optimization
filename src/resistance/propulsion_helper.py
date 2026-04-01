@@ -7,7 +7,10 @@ from __future__ import annotations
 import math
 
 from src.resistance.models import PropulsionResult, ResistanceResult, ShipResistanceSpecs
-from src.resistance.wageningen_helper import calculate_kq, calculate_kt, get_quadratic_coefficients
+
+
+KT_COEFFS = (-0.0299, -0.4763, 0.54)
+KQ_COEFFS = (-0.0116, -0.05077, 0.07448)
 
 
 class PropulsionHelper:
@@ -31,6 +34,11 @@ class PropulsionHelper:
             return fallback
         return min(positive, key=lambda value: abs(value - fallback))
 
+    @staticmethod
+    def _evaluate_quadratic(coeffs: tuple[float, float, float], x: float) -> float:
+        a, b, c = coeffs
+        return a * x * x + b * x + c
+
     def calculate_propulsion(
         self,
         v_knots: float,
@@ -42,9 +50,8 @@ class PropulsionHelper:
         if n_rps <= 1e-9 or v_knots <= 0.0:
             return PropulsionResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
-        pitch = v_knots / n_rps
-        pitch_ratio = pitch / ship.PropellerDiameter
-        kt_coeffs, kq_coeffs = get_quadratic_coefficients(0.0, 1.2, pitch_ratio, ship.AEAO, ship.NumberOfBlades)
+        kt_coeffs = KT_COEFFS
+        kq_coeffs = KQ_COEFFS
 
         v_c = v_knots * 0.514444
         v_design = ship.DesignSpeed * 0.514444
@@ -76,8 +83,8 @@ class PropulsionHelper:
             v_id = max(0.1, v_id - alpha * diff)
 
         j_final = v_id * (1.0 - w) / (n_rps * ship.PropellerDiameter)
-        kt_final = calculate_kt(j_final, pitch_ratio, ship.AEAO, ship.NumberOfBlades)
-        kq_final = calculate_kq(j_final, pitch_ratio, ship.AEAO, ship.NumberOfBlades)
+        kt_final = self._evaluate_quadratic(kt_coeffs, j_final)
+        kq_final = self._evaluate_quadratic(kq_coeffs, j_final)
         eta_o = 0.0 if abs(kq_final) < 1e-12 else j_final / (2.0 * math.pi) * (kt_final / kq_final)
         eta_d = eta_o * eta_r * eta_h
         power_kw = total_resistance_n * v_id / eta_d / 1000.0 if eta_d > 1e-4 else 0.0

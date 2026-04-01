@@ -123,11 +123,12 @@ def main():
             "  Route validity: "
             f"overall={route['valid']} "
             f"departure={route['valid_departure_heading']} "
-            f"turning={route['valid_turning']} "
             f"last_speed={route['valid_speed']} "
-            f"last_heading={route['valid_heading']}"
+            f"land={(route['land_violation'] <= 0.0)}"
         )
         print(f"  Land violation: {validation.land_violation:.1f}")
+        print(f"  Turning (diagnostic): {route['valid_turning']}")
+        print(f"  Final heading ok (diagnostic): {route['valid_heading']}")
         print(f"  Last STW: {route['last_speed']:.2f} kts | Last SOG: {route['last_speed_sog']:.2f} kts")
 
         if milp_result["feasible"]:

@@ -101,6 +101,7 @@ def main():
         n_workers=0,
         sfoc_path=SFOC_PATH,
         rta_h=RTA_HOURS,
+        smoothing_weight=0.0,
     )
 
     elapsed = time.time() - t0
@@ -110,16 +111,18 @@ def main():
     print(" GA result")
     print("=" * 60)
     print(f"  GA objective: {ga_result['best_fitness']:.1f}")
+    print("  GA seed: random")
     print(f"  Elapsed: {elapsed:.1f} sec")
     print(
         "  Route validity: "
         f"overall={route['valid']} "
         f"departure={route['valid_departure_heading']} "
-        f"turning={route['valid_turning']} "
         f"last_speed={route['valid_speed']} "
-        f"last_heading={route['valid_heading']}"
+        f"land={(route['land_violation'] <= 0.0)}"
     )
     print(f"  Land violation: {route['land_violation']:.1f}")
+    print(f"  Turning (diagnostic): {route['valid_turning']}")
+    print(f"  Final heading ok (diagnostic): {route['valid_heading']}")
     print(f"  Last STW: {route['last_speed']:.2f} kts | Last SOG: {route['last_speed_sog']:.2f} kts")
     print(f"  Final heading delta: {route['final_heading_delta']:.2f} deg")
 

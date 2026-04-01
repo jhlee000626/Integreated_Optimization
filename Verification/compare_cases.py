@@ -71,7 +71,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ga-pop-size", type=int, default=20, help="GA population size for cases 2 and 3.")
     parser.add_argument("--ga-n-gen", type=int, default=10, help="GA generation count for cases 2 and 3.")
     parser.add_argument("--ga-workers", type=int, default=1, help="GA worker count.")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for GA cases.")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for GA cases. Use None for random initialization.")
     parser.add_argument(
         "--ga-cost-resolution",
         type=float,
@@ -204,6 +204,7 @@ def _run_case3(
         n_gen=ga_n_gen,
         seed=seed,
         n_workers=ga_workers,
+        smoothing_weight=0.0,
     )
     route = ga_result["best_route"]
     _, power_profile, milp_result = solve_route_schedule(route, env_fn, departure_time_utc, initial_soc=0.7)

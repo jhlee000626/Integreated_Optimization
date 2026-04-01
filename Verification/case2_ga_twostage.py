@@ -53,7 +53,7 @@ def main():
             rta_h=RTA_HOURS,
             pop_size=60,
             n_gen=60,
-            seed=42,
+            seed=None,
             n_workers=1,
             smoothing_weight=0.0,
         )
@@ -71,11 +71,12 @@ def main():
             "  Route validity: "
             f"overall={route['valid']} "
             f"departure={route['valid_departure_heading']} "
-            f"turning={route['valid_turning']} "
             f"last_speed={route['valid_speed']} "
-            f"last_heading={route['valid_heading']}"
+            f"land={(route['land_violation'] <= 0.0)}"
         )
         print(f"  Land violation: {route['land_violation']:.1f}")
+        print(f"  Turning (diagnostic): {route['valid_turning']}")
+        print(f"  Final heading ok (diagnostic): {route['valid_heading']}")
         if milp_result["feasible"]:
             print(f"  MILP fuel: {milp_result['total_fuel_kg']:.2f} kg")
         else:

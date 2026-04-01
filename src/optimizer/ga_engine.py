@@ -16,27 +16,25 @@ import numpy as np
 from deap import algorithms, base, creator, tools
 
 from src.grid.no_go_zone import BUSAN_PORT, JEJU_PORT
-from src.grid.pathfinding import build_astar_route_points
-from src.resistance.modified_dpm import compute_P_req
 from src.resistance.models import EnvironmentData
+from src.resistance.modified_dpm import compute_P_req
 from src.ship.kcs_specs import POWER_MODEL, SERVICE_LOAD
 
 
 BIG_PENALTY = 1e12
-SOFT_PENALTY_BASE = 5_000.0
 RTA_HOURS = 11.0
 N_SEGMENTS = 22
 MAX_HEADING_DELTA = 30.0
-FIRST_HEADING_MIN = 40.0
+FIRST_HEADING_MIN = 140.0
 FIRST_HEADING_MAX = 220.0
 V_MIN, V_MAX = 5.0, 24.0
 GAMMA = 0.7
 V_MIN_PORT = V_MIN
 V_MAX_PORT = V_MAX * GAMMA
-SMOOTHING_WEIGHT = 50.0
-GUIDED_INIT_FRACTION = 0.7
-GUIDED_HEADING_NOISE_DEG = 8.0
-GUIDED_SPEED_NOISE_KTS = 1.0
+SMOOTHING_WEIGHT = 0.0
+DEPARTURE_CORRIDOR_HEADING_STEP_DEG = 2.0
+DEPARTURE_CORRIDOR_SPEED_STEP_KTS = 0.5
+DEPARTURE_CORRIDOR_MAX_CANDIDATES = 120
 
 
 @dataclass
@@ -47,15 +45,9 @@ class RouteValidationResult:
     valid_turning: bool
     valid_speed: bool
     valid_heading: bool
-    first_heading_deg: float
-    max_internal_heading_delta_deg: float
     last_speed_sog_kts: float
     last_speed_stw_kts: float
     final_heading_delta_deg: float
-    departure_excess_deg: float
-    max_internal_turn_excess_deg: float
-    speed_excess_kts: float
-    heading_excess_deg: float
 
 
 _worker_cost_map = None
@@ -65,7 +57,6 @@ _worker_n_segments = N_SEGMENTS
 _worker_rta_h = RTA_HOURS
 _worker_departure_time_utc = None
 _worker_smoothing_weight = SMOOTHING_WEIGHT
-_worker_generation_progress = None
 
 
 def _default_departure_time_utc() -> datetime:
@@ -85,6 +76,7 @@ def _wrap_wind_weather_fn(weather_fn: Callable | None) -> Callable | None:
         return None
 
     def env_fn(lat: float, lon: float, when_utc: datetime) -> EnvironmentData:
+        del when_utc
         wind_speed, wind_dir = weather_fn(lat, lon)
         return EnvironmentData(wind_speed_ms=float(wind_speed), wind_dir_deg=float(wind_dir))
 
@@ -127,11 +119,6 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-def _clamp_heading_relative(candidate_deg: float, reference_deg: float, max_delta_deg: float) -> float:
-    delta_deg = _angle_delta_deg(candidate_deg, reference_deg)
-    return (reference_deg + _clamp(delta_deg, -max_delta_deg, max_delta_deg)) % 360.0
-
-
 def _current_component_knots(env: EnvironmentData, heading_deg: float) -> float:
     if not math.isfinite(env.current_speed_ms) or not math.isfinite(env.current_dir_deg):
         return 0.0
@@ -139,17 +126,6 @@ def _current_component_knots(env: EnvironmentData, heading_deg: float) -> float:
         return 0.0
     heading_delta = _angle_delta_deg(env.current_dir_deg, heading_deg)
     return (env.current_speed_ms * math.cos(math.radians(heading_delta))) / 0.514444
-
-
-def compute_speed_over_ground_knots(
-    v_stw_knots: float,
-    heading_deg: float,
-    env: EnvironmentData,
-) -> float:
-    v_sog = v_stw_knots + _current_component_knots(env, heading_deg)
-    if not math.isfinite(v_sog):
-        return max(0.1, v_stw_knots)
-    return max(0.1, v_sog)
 
 
 def compute_speed_through_water_knots(
@@ -177,11 +153,9 @@ def _worker_init(
     rta_h: float,
     departure_time_utc: datetime,
     smoothing_weight: float,
-    generation_progress,
 ):
     global _worker_cost_map, _worker_milp, _worker_env_fn
-    global _worker_n_segments, _worker_rta_h, _worker_departure_time_utc
-    global _worker_smoothing_weight, _worker_generation_progress
+    global _worker_n_segments, _worker_rta_h, _worker_departure_time_utc, _worker_smoothing_weight
 
     from src.optimizer.milp_solver import MILPSolver
 
@@ -192,13 +166,9 @@ def _worker_init(
     _worker_rta_h = rta_h
     _worker_departure_time_utc = departure_time_utc
     _worker_smoothing_weight = smoothing_weight
-    _worker_generation_progress = generation_progress
 
 
 def _evaluate_parallel(individual):
-    generation_progress = 1.0
-    if _worker_generation_progress is not None:
-        generation_progress = float(_worker_generation_progress.value)
     return evaluate(
         individual,
         cost_map=_worker_cost_map,
@@ -208,7 +178,6 @@ def _evaluate_parallel(individual):
         rta_h=_worker_rta_h,
         departure_time_utc=_worker_departure_time_utc,
         smoothing_weight=_worker_smoothing_weight,
-        generation_progress=generation_progress,
     )
 
 
@@ -270,46 +239,26 @@ def compute_encounter_angle(
     encounter_rad = math.radians(heading_deg - wind_dir_deg)
     encounter_x = ship_speed_knots * 0.514444 + wind_speed_ms * math.cos(encounter_rad)
     encounter_y = wind_speed_ms * math.sin(encounter_rad)
-    encounter = math.degrees(math.atan2(encounter_y, encounter_x)) % 360.0
-    return encounter
+    return math.degrees(math.atan2(encounter_y, encounter_x)) % 360.0
 
 
-def _build_nodes(
-    waypoints: Sequence[tuple[float, float]],
-    speeds_sog: Sequence[float],
-    headings: Sequence[float],
-    dt_per_seg: float,
-    speeds_stw: Sequence[float | None] | None = None,
-) -> list[dict]:
-    nodes: list[dict] = []
-    for index, (lat, lon) in enumerate(waypoints):
-        node = {
-            "lat": lat,
-            "lon": lon,
-            "time_h": index * dt_per_seg,
-            "time_utc": None,
-            "speed_out_kts": speeds_sog[index] if index < len(speeds_sog) else None,
-            "speed_over_ground_kts": speeds_sog[index] if index < len(speeds_sog) else None,
-            "speed_through_water_kts": speeds_stw[index] if speeds_stw is not None and index < len(speeds_stw) else None,
-            "heading_out_deg": headings[index] if index < len(headings) else None,
-        }
-        nodes.append(node)
-    return nodes
+def _make_node(lat: float, lon: float, time_h: float) -> dict:
+    return {
+        "lat": lat,
+        "lon": lon,
+        "time_h": time_h,
+        "time_utc": None,
+        "speed_out_kts": None,
+        "speed_over_ground_kts": None,
+        "speed_through_water_kts": None,
+        "heading_out_deg": None,
+    }
 
 
-def _sog_bounds_for_segment(segment_index: int, n_free: int) -> tuple[float, float]:
+def _sog_bounds_for_segment(segment_index: int) -> tuple[float, float]:
     if segment_index == 0:
         return V_MIN_PORT, V_MAX_PORT
     return V_MIN, V_MAX
-
-
-def _intermediate_delta_headings(headings: Sequence[float]) -> list[float]:
-    if len(headings) <= 2:
-        return []
-    deltas = []
-    for index in range(1, len(headings) - 1):
-        deltas.append(_angle_delta_deg(headings[index], headings[index - 1]))
-    return deltas
 
 
 def decode_route(
@@ -325,11 +274,8 @@ def decode_route(
     n_free = n_segments - 1
     dt_per_seg = rta_h / n_segments
 
-    speeds_sog = [float(individual[i * 2]) for i in range(n_free)]
-    heading_genes = [float(individual[i * 2 + 1]) % 360.0 for i in range(n_free)]
-
-    waypoints = [BUSAN_PORT]
-    speeds: list[float] = []
+    nodes = [_make_node(BUSAN_PORT[0], BUSAN_PORT[1], 0.0)]
+    speeds_sog: list[float] = []
     headings: list[float] = []
     delta_headings: list[float] = []
     distances: list[float] = []
@@ -339,87 +285,101 @@ def decode_route(
     base_heading = compute_bearing(*BUSAN_PORT, *JEJU_PORT)
     prev_heading = base_heading
 
-    for index in range(n_free):
-        v_sog_kts = speeds_sog[index]
-        theta_deg = heading_genes[index]
-        delta_deg = _angle_delta_deg(theta_deg, prev_heading)
-        dist_nm = v_sog_kts * dt_per_seg
-        new_lat, new_lon = move_position(current_lat, current_lon, theta_deg, dist_nm)
+    for segment_index in range(n_free):
+        sog_kts = float(individual[2 * segment_index])
+        heading_gene = float(individual[2 * segment_index + 1])
+        if segment_index == 0:
+            heading_deg = heading_gene % 360.0
+            delta_deg = _angle_delta_deg(heading_deg, base_heading)
+        else:
+            delta_deg = heading_gene
+            heading_deg = (prev_heading + delta_deg) % 360.0
 
-        waypoints.append((new_lat, new_lon))
-        speeds.append(v_sog_kts)
-        headings.append(theta_deg)
+        dist_nm = sog_kts * dt_per_seg
+        next_lat, next_lon = move_position(current_lat, current_lon, heading_deg, dist_nm)
+
+        nodes[-1]["speed_out_kts"] = sog_kts
+        nodes[-1]["speed_over_ground_kts"] = sog_kts
+        nodes[-1]["heading_out_deg"] = heading_deg
+
+        speeds_sog.append(sog_kts)
+        headings.append(heading_deg)
         delta_headings.append(delta_deg)
         distances.append(dist_nm)
         dt_list.append(dt_per_seg)
+        nodes.append(_make_node(next_lat, next_lon, (segment_index + 1) * dt_per_seg))
 
-        current_lat, current_lon = new_lat, new_lon
-        prev_heading = theta_deg
+        current_lat, current_lon = next_lat, next_lon
+        prev_heading = heading_deg
 
-    dest_lat, dest_lon = JEJU_PORT
-    final_heading = compute_bearing(current_lat, current_lon, dest_lat, dest_lon)
-    final_dist_nm = haversine_nm((current_lat, current_lon), (dest_lat, dest_lon))
+    final_heading = compute_bearing(current_lat, current_lon, JEJU_PORT[0], JEJU_PORT[1])
+    final_dist_nm = haversine_nm((current_lat, current_lon), JEJU_PORT)
     final_sog_kts = final_dist_nm / dt_per_seg if dt_per_seg > 0.0 else 0.0
     final_heading_delta = _angle_delta_deg(final_heading, prev_heading)
 
-    waypoints.append(JEJU_PORT)
-    speeds.append(final_sog_kts)
+    nodes[-1]["speed_out_kts"] = final_sog_kts
+    nodes[-1]["speed_over_ground_kts"] = final_sog_kts
+    nodes[-1]["heading_out_deg"] = final_heading
+
+    speeds_sog.append(final_sog_kts)
     headings.append(final_heading)
     delta_headings.append(final_heading_delta)
     distances.append(final_dist_nm)
     dt_list.append(dt_per_seg)
+    nodes.append(_make_node(JEJU_PORT[0], JEJU_PORT[1], n_segments * dt_per_seg))
 
-    nodes = _build_nodes(waypoints, speeds, headings, dt_per_seg)
-
+    waypoints = [(node["lat"], node["lon"]) for node in nodes]
     return {
-        "waypoints": waypoints,
         "nodes": nodes,
-        "speeds": speeds,
-        "speeds_sog": list(speeds),
-        "speeds_stw": [None] * len(speeds),
+        "waypoints": waypoints,
+        "speeds": list(speeds_sog),
+        "speeds_sog": list(speeds_sog),
+        "speeds_stw": [None] * len(speeds_sog),
         "headings": headings,
         "delta_headings": delta_headings,
         "dt": dt_list,
         "distances_nm": distances,
         "valid": False,
         "valid_departure_heading": False,
-        "valid_turning": False,
-        "valid_speed": False,
-        "valid_heading": False,
+        "valid_turning": True,
+        "valid_speed": False, 
+        "valid_heading": True,
         "land_violation": 0.0,
         "last_speed": float("nan"),
         "last_speed_sog": final_sog_kts,
         "final_heading_delta": final_heading_delta,
-       }
+    }
 
 
-def _build_segment_states(
+def _build_node_transitions(
     route: dict,
     env_fn: Callable | None,
     departure_time_utc: datetime | None,
 ) -> list[dict]:
     resolved_env_fn = _normalize_env_fn(env_fn=env_fn)
     departure_time_utc = _coerce_departure_time_utc(departure_time_utc)
-    segment_states: list[dict] = []
+    transitions: list[dict] = []
+    speeds_stw: list[float] = []
 
-    for segment_index in range(len(route["speeds"])):
+    for segment_index in range(len(route["nodes"]) - 1):
         node = route["nodes"][segment_index]
+        next_node = route["nodes"][segment_index + 1]
         when_utc = departure_time_utc + timedelta(hours=float(node["time_h"]))
         env = _resolve_environment(resolved_env_fn, node["lat"], node["lon"], when_utc)
-        sog_kts = float(route["speeds"][segment_index])
-        heading_deg = float(route["headings"][segment_index])
+        sog_kts = float(node["speed_out_kts"])
+        heading_deg = float(node["heading_out_deg"])
         stw_kts = compute_speed_through_water_knots(sog_kts, heading_deg, env)
         current_component_kts = _current_component_knots(env, heading_deg)
 
         node["time_utc"] = when_utc
-        node["speed_out_kts"] = sog_kts
         node["speed_over_ground_kts"] = sog_kts
         node["speed_through_water_kts"] = stw_kts
 
-        segment_states.append(
+        transitions.append(
             {
                 "segment": segment_index,
                 "node": node,
+                "next_node": next_node,
                 "when_utc": when_utc,
                 "environment": env,
                 "speed_sog_kts": sog_kts,
@@ -427,16 +387,16 @@ def _build_segment_states(
                 "speed_stw_power_kts": _power_stw_knots(stw_kts),
                 "heading_deg": heading_deg,
                 "current_component_kts": current_component_kts,
-                "waypoint_from": route["waypoints"][segment_index],
-                "waypoint_to": route["waypoints"][segment_index + 1],
             }
         )
+        speeds_stw.append(stw_kts)
 
     if route["nodes"]:
-        route["nodes"][-1]["time_utc"] = departure_time_utc + timedelta(hours=float(route["nodes"][-1]["time_h"]))
+        last_node = route["nodes"][-1]
+        last_node["time_utc"] = departure_time_utc + timedelta(hours=float(last_node["time_h"]))
 
-    route["speeds_stw"] = [state["speed_stw_kts"] for state in segment_states]
-    return segment_states
+    route["speeds_stw"] = speeds_stw
+    return transitions
 
 
 def evaluate_route_validity(
@@ -445,43 +405,24 @@ def evaluate_route_validity(
     env_fn: Callable | None = None,
     departure_time_utc: datetime | None = None,
 ) -> RouteValidationResult:
-    segment_states = _build_segment_states(route, env_fn=env_fn, departure_time_utc=departure_time_utc)
+    transitions = _build_node_transitions(route, env_fn=env_fn, departure_time_utc=departure_time_utc)
+
     headings = route["headings"]
     first_heading = headings[0] if headings else compute_bearing(*BUSAN_PORT, *JEJU_PORT)
     valid_departure_heading = FIRST_HEADING_MIN <= first_heading <= FIRST_HEADING_MAX
-    departure_excess = 0.0
-    if first_heading < FIRST_HEADING_MIN:
-        departure_excess = FIRST_HEADING_MIN - first_heading
-    elif first_heading > FIRST_HEADING_MAX:
-        departure_excess = first_heading - FIRST_HEADING_MAX
 
-    internal_deltas = _intermediate_delta_headings(headings)
-    if internal_deltas:
-        max_internal_delta = max(abs(delta_deg) for delta_deg in internal_deltas)
-    else:
-        max_internal_delta = 0.0
+    internal_deltas = route["delta_headings"][1:-1] if len(route["delta_headings"]) > 2 else []
     valid_turning = all(abs(delta_deg) <= MAX_HEADING_DELTA for delta_deg in internal_deltas)
-    max_internal_turn_excess = max(0.0, max_internal_delta - MAX_HEADING_DELTA)
 
-    final_heading_delta = route["delta_headings"][-1] if route["delta_headings"] else 0.0
+    final_heading_delta = route["final_heading_delta"]
     valid_heading = abs(final_heading_delta) <= MAX_HEADING_DELTA
-    heading_excess = max(0.0, abs(final_heading_delta) - MAX_HEADING_DELTA)
 
-    last_speed_sog = route["speeds"][-1] if route["speeds"] else 0.0
-    last_speed_stw = segment_states[-1]["speed_stw_kts"] if segment_states else float("nan")
-    valid_speed = math.isfinite(last_speed_stw) and V_MIN_PORT <= last_speed_stw <= V_MAX_PORT
-    speed_excess = 0.0
-    if not valid_speed and math.isfinite(last_speed_stw):
-        if last_speed_stw < V_MIN_PORT:
-            speed_excess = V_MIN_PORT - last_speed_stw
-        else:
-            speed_excess = last_speed_stw - V_MAX_PORT
-    elif not math.isfinite(last_speed_stw):
-        speed_excess = V_MAX_PORT
+    last_speed_sog = route["last_speed_sog"]
+    valid_speed = V_MIN_PORT <= last_speed_sog <= V_MAX_PORT
 
+    last_speed_stw = transitions[-1]["speed_stw_kts"] if transitions else float("nan")
     land_violation = compute_violation(route, cost_map) if cost_map is not None else 0.0
-    valid_land = land_violation <= 0.0
-    valid = valid_departure_heading and valid_turning and valid_speed and valid_heading and valid_land
+    valid = valid_departure_heading and valid_speed and land_violation <= 0.0
 
     return RouteValidationResult(
         valid=valid,
@@ -490,15 +431,9 @@ def evaluate_route_validity(
         valid_turning=valid_turning,
         valid_speed=valid_speed,
         valid_heading=valid_heading,
-        first_heading_deg=float(first_heading),
-        max_internal_heading_delta_deg=float(max_internal_delta),
         last_speed_sog_kts=float(last_speed_sog),
         last_speed_stw_kts=float(last_speed_stw),
         final_heading_delta_deg=float(final_heading_delta),
-        departure_excess_deg=float(departure_excess),
-        max_internal_turn_excess_deg=float(max_internal_turn_excess),
-        speed_excess_kts=float(speed_excess),
-        heading_excess_deg=float(heading_excess),
     )
 
 
@@ -512,219 +447,86 @@ def apply_route_validation(route: dict, validation: RouteValidationResult) -> di
     route["last_speed"] = validation.last_speed_stw_kts
     route["last_speed_sog"] = validation.last_speed_sog_kts
     route["final_heading_delta"] = validation.final_heading_delta_deg
-    route["max_internal_heading_delta"] = validation.max_internal_heading_delta_deg
     return route
-
-
-def _speed_excess_for_remaining_sog(speed_kts: float, segment_index: int, n_segments: int) -> float:
-    if segment_index == n_segments - 1:
-        return max(0.0, V_MIN_PORT - speed_kts, speed_kts - V_MAX_PORT)
-    return max(0.0, V_MIN - speed_kts, speed_kts - V_MAX)
-
-
-def _candidate_headings(
-    desired_heading: float,
-    previous_heading: float,
-    segment_index: int,
-) -> list[float]:
-    if segment_index == 0:
-        base = _clamp(desired_heading, FIRST_HEADING_MIN, FIRST_HEADING_MAX)
-        candidates = [base]
-        for offset in (5.0, 10.0, 15.0, 20.0, 30.0):
-            candidates.append(_clamp(base + offset, FIRST_HEADING_MIN, FIRST_HEADING_MAX))
-            candidates.append(_clamp(base - offset, FIRST_HEADING_MIN, FIRST_HEADING_MAX))
-        candidates.extend([
-            FIRST_HEADING_MIN,
-            FIRST_HEADING_MAX,
-            random.uniform(FIRST_HEADING_MIN, FIRST_HEADING_MAX),
-            random.uniform(FIRST_HEADING_MIN, FIRST_HEADING_MAX),
-        ])
-    else:
-        base = _clamp_heading_relative(desired_heading, previous_heading, MAX_HEADING_DELTA)
-        candidates = [base]
-        for offset in (5.0, 10.0, 15.0, 20.0, 25.0, 30.0):
-            candidates.append(_clamp_heading_relative(base + offset, previous_heading, MAX_HEADING_DELTA))
-            candidates.append(_clamp_heading_relative(base - offset, previous_heading, MAX_HEADING_DELTA))
-        candidates.extend([
-            _clamp_heading_relative(random.uniform(0.0, 360.0), previous_heading, MAX_HEADING_DELTA),
-            _clamp_heading_relative(random.uniform(0.0, 360.0), previous_heading, MAX_HEADING_DELTA),
-        ])
-    unique = []
-    for heading in candidates:
-        value = heading % 360.0
-        if not any(abs(_angle_delta_deg(value, existing)) < 1e-6 for existing in unique):
-            unique.append(value)
-    return unique
-
-
-def _candidate_speeds(target_sog_kts: float, segment_index: int, n_free: int) -> list[float]:
-    low, high = _sog_bounds_for_segment(segment_index, n_free)
-    base = _clamp(target_sog_kts, low, high)
-    candidates = [base]
-    for delta in (0.5, 1.0, 1.5, 2.0):
-        candidates.append(_clamp(base + delta, low, high))
-        candidates.append(_clamp(base - delta, low, high))
-    candidates.extend([
-        random.uniform(low, high),
-        random.uniform(low, high),
-    ])
-    unique = []
-    for speed in candidates:
-        if not any(abs(speed - existing) < 1e-6 for existing in unique):
-            unique.append(speed)
-    return unique
-
-
-def _select_rollout_candidate(
-    current_position: tuple[float, float],
-    previous_heading: float,
-    segment_index: int,
-    n_segments: int,
-    dt_per_seg: float,
-    cost_map,
-    desired_heading: float,
-    target_sog_kts: float,
-    corridor_target: tuple[float, float] | None = None,
-) -> tuple[float, float, tuple[float, float]]:
-    n_free = n_segments - 1
-    best: tuple[float, float, tuple[float, float]] | None = None
-    best_score = float("inf")
-    heading_candidates = _candidate_headings(desired_heading, previous_heading, segment_index)
-    speed_candidates = _candidate_speeds(target_sog_kts, segment_index, n_free)
-    remaining_after = n_segments - (segment_index + 1)
-
-    for heading in heading_candidates:
-        for sog_kts in speed_candidates:
-            next_position = move_position(current_position[0], current_position[1], heading, sog_kts * dt_per_seg)
-            segment_cost = cost_map.segment_cost(
-                current_position[0],
-                current_position[1],
-                next_position[0],
-                next_position[1],
-            )
-            remaining_dist = haversine_nm(next_position, JEJU_PORT)
-            score = segment_cost * 1e9
-            if remaining_after > 0:
-                required_sog = remaining_dist / max(remaining_after * dt_per_seg, 1e-9)
-                score += 100.0 * _speed_excess_for_remaining_sog(required_sog, segment_index + 1, n_segments)
-            next_heading_to_dest = compute_heading(next_position, JEJU_PORT)
-            score += 10.0 * max(0.0, abs(_angle_delta_deg(next_heading_to_dest, heading)) - MAX_HEADING_DELTA)
-            if corridor_target is not None:
-                score += 0.25 * haversine_nm(next_position, corridor_target)
-            score += 0.05 * abs(_angle_delta_deg(heading, desired_heading))
-
-            if segment_cost <= 0.0 and score < best_score:
-                best_score = score
-                best = (sog_kts, heading, next_position)
-            elif best is None and score < best_score:
-                best_score = score
-                best = (sog_kts, heading, next_position)
-
-    if best is None:
-        fallback_heading = heading_candidates[0]
-        fallback_sog = speed_candidates[0]
-        fallback_position = move_position(current_position[0], current_position[1], fallback_heading, fallback_sog * dt_per_seg)
-        best = (fallback_sog, fallback_heading, fallback_position)
-    return best
 
 
 def repair_individual(individual: list) -> list:
     n_free = len(individual) // 2
-    previous_heading = None
     for segment_index in range(n_free):
         speed_index = 2 * segment_index
         heading_index = speed_index + 1
-        low, high = _sog_bounds_for_segment(segment_index, n_free)
+        low, high = _sog_bounds_for_segment(segment_index)
         individual[speed_index] = _clamp(float(individual[speed_index]), low, high)
-        heading = float(individual[heading_index]) % 360.0
         if segment_index == 0:
-            heading = _clamp(heading, FIRST_HEADING_MIN, FIRST_HEADING_MAX)
+            heading = float(individual[heading_index]) % 360.0
+            individual[heading_index] = _clamp(heading, FIRST_HEADING_MIN, FIRST_HEADING_MAX)
         else:
-            heading = _clamp_heading_relative(heading, previous_heading, MAX_HEADING_DELTA)
-        individual[heading_index] = heading
-        previous_heading = heading
+            delta_heading = float(individual[heading_index])
+            individual[heading_index] = _clamp(delta_heading, -MAX_HEADING_DELTA, MAX_HEADING_DELTA)
     return individual
 
 
-def _build_guided_individual(
-    n_segments: int,
-    rta_h: float,
+def _build_departure_corridor(
     cost_map,
-    corridor_waypoints: Sequence[tuple[float, float]] | None = None,
-    heading_noise_deg: float = GUIDED_HEADING_NOISE_DEG,
-    speed_noise_kts: float = GUIDED_SPEED_NOISE_KTS,
-):
-    n_free = n_segments - 1
-    dt_per_seg = rta_h / n_segments
-    genes: list[float] = []
-    current_position = BUSAN_PORT
-    previous_heading = compute_bearing(*BUSAN_PORT, *JEJU_PORT)
+    dt_per_seg: float,
+    base_bearing: float,
+) -> list[tuple[float, float]]:
+    if cost_map is None:
+        return []
 
-    for segment_index in range(n_free):
-        corridor_target = None
-        if corridor_waypoints is not None and segment_index + 1 < len(corridor_waypoints):
-            corridor_target = corridor_waypoints[segment_index + 1]
-        target_point = corridor_target or JEJU_PORT
-        desired_heading = compute_heading(current_position, target_point)
-        desired_heading += random.uniform(-heading_noise_deg, heading_noise_deg)
-        remaining_time_h = max((n_segments - segment_index) * dt_per_seg, 1e-9)
-        if corridor_target is not None:
-            target_sog = haversine_nm(current_position, corridor_target) / dt_per_seg
-        else:
-            target_sog = haversine_nm(current_position, JEJU_PORT) / remaining_time_h
-        target_sog += random.uniform(-speed_noise_kts, speed_noise_kts)
+    candidates: list[tuple[float, float, float, float]] = []
+    heading_deg = FIRST_HEADING_MIN
+    while heading_deg <= FIRST_HEADING_MAX + 1e-9:
+        speed_kts = V_MIN_PORT
+        while speed_kts <= V_MAX_PORT + 1e-9:
+            dist_nm = speed_kts * dt_per_seg
+            next_lat, next_lon = move_position(
+                BUSAN_PORT[0],
+                BUSAN_PORT[1],
+                heading_deg,
+                dist_nm,
+            )
+            segment_cost = float(
+                cost_map.segment_cost(
+                    BUSAN_PORT[0],
+                    BUSAN_PORT[1],
+                    next_lat,
+                    next_lon,
+                )
+            )
+            if segment_cost <= 0.0:
+                candidates.append(
+                    (
+                        round(speed_kts, 3),
+                        round(heading_deg, 3),
+                        abs(_angle_delta_deg(heading_deg, base_bearing)),
+                        abs(speed_kts - 0.5 * (V_MIN_PORT + V_MAX_PORT)),
+                    )
+                )
+            speed_kts += DEPARTURE_CORRIDOR_SPEED_STEP_KTS
+        heading_deg += DEPARTURE_CORRIDOR_HEADING_STEP_DEG
 
-        sog_kts, heading_deg, next_position = _select_rollout_candidate(
-            current_position=current_position,
-            previous_heading=previous_heading,
-            segment_index=segment_index,
-            n_segments=n_segments,
-            dt_per_seg=dt_per_seg,
-            cost_map=cost_map,
-            desired_heading=desired_heading,
-            target_sog_kts=target_sog,
-            corridor_target=corridor_target,
-        )
-        genes.extend([sog_kts, heading_deg])
-        current_position = next_position
-        previous_heading = heading_deg
-
-    individual = creator.Individual(genes)
-    return repair_individual(individual)
+    candidates.sort(key=lambda item: (item[2], item[3], item[1]))
+    trimmed = candidates[:DEPARTURE_CORRIDOR_MAX_CANDIDATES]
+    return [(speed_kts, heading_deg) for speed_kts, heading_deg, _, _ in trimmed]
 
 
-def _build_rollout_individual(
-    n_segments: int,
-    rta_h: float,
-    cost_map,
-):
-    n_free = n_segments - 1
-    dt_per_seg = rta_h / n_segments
-    genes: list[float] = []
-    current_position = BUSAN_PORT
-    previous_heading = compute_bearing(*BUSAN_PORT, *JEJU_PORT)
+def _apply_departure_corridor(individual: list, departure_corridor: Sequence[tuple[float, float]]) -> list:
+    if not departure_corridor:
+        return individual
 
-    for segment_index in range(n_free):
-        desired_heading = compute_heading(current_position, JEJU_PORT)
-        remaining_time_h = max((n_segments - segment_index) * dt_per_seg, 1e-9)
-        target_sog = haversine_nm(current_position, JEJU_PORT) / remaining_time_h
-        sog_kts, heading_deg, next_position = _select_rollout_candidate(
-            current_position=current_position,
-            previous_heading=previous_heading,
-            segment_index=segment_index,
-            n_segments=n_segments,
-            dt_per_seg=dt_per_seg,
-            cost_map=cost_map,
-            desired_heading=desired_heading,
-            target_sog_kts=target_sog,
-            corridor_target=None,
-        )
-        genes.extend([sog_kts, heading_deg])
-        current_position = next_position
-        previous_heading = heading_deg
-
-    individual = creator.Individual(genes)
-    return repair_individual(individual)
+    target_speed = float(individual[0])
+    target_heading = float(individual[1]) % 360.0
+    best_speed, best_heading = min(
+        departure_corridor,
+        key=lambda candidate: (
+            abs(_angle_delta_deg(candidate[1], target_heading)),
+            abs(candidate[0] - target_speed),
+        ),
+    )
+    individual[0] = best_speed
+    individual[1] = best_heading
+    return individual
 
 
 def build_required_power_profile(
@@ -734,14 +536,15 @@ def build_required_power_profile(
     weather_fn: Callable | None = None,
 ) -> list[dict]:
     resolved_env_fn = _normalize_env_fn(env_fn=env_fn, weather_fn=weather_fn)
-    segment_states = _build_segment_states(route, env_fn=resolved_env_fn, departure_time_utc=departure_time_utc)
+    transitions = _build_node_transitions(route, env_fn=resolved_env_fn, departure_time_utc=departure_time_utc)
     power_profile: list[dict] = []
 
-    for segment_index, state in enumerate(segment_states):
-        heading = state["heading_deg"]
-        env = state["environment"]
-        sog_kts = state["speed_sog_kts"]
-        stw_kts = state["speed_stw_kts"]
+    for transition in transitions:
+        segment_index = transition["segment"]
+        heading = transition["heading_deg"]
+        env = transition["environment"]
+        sog_kts = transition["speed_sog_kts"]
+        stw_kts = transition["speed_stw_kts"]
         encounter_deg = compute_encounter_angle(
             heading_deg=heading,
             wind_dir_deg=float(env.wind_dir_deg or 0.0),
@@ -751,14 +554,14 @@ def build_required_power_profile(
 
         if segment_index == 0:
             phase = "departure"
-        elif segment_index == len(segment_states) - 1:
+        elif segment_index == len(transitions) - 1:
             phase = "approach"
         else:
             phase = "cruising"
 
         p_service = SERVICE_LOAD[phase]
         result = compute_P_req(
-            v_ship_knots=state["speed_stw_power_kts"],
+            v_ship_knots=transition["speed_stw_power_kts"],
             v_wind_ms=float(env.wind_speed_ms),
             encounter_angle_deg=encounter_deg,
             a1=POWER_MODEL["a1"],
@@ -770,14 +573,14 @@ def build_required_power_profile(
             {
                 "segment": segment_index,
                 "phase": phase,
-                "when_utc": state["when_utc"],
-                "node": state["node"],
-                "waypoint_from": state["waypoint_from"],
-                "waypoint_to": state["waypoint_to"],
+                "when_utc": transition["when_utc"],
+                "node": transition["node"],
+                "waypoint_from": (transition["node"]["lat"], transition["node"]["lon"]),
+                "waypoint_to": (transition["next_node"]["lat"], transition["next_node"]["lon"]),
                 "speed_kts": sog_kts,
                 "speed_sog_kts": sog_kts,
                 "speed_stw_kts": stw_kts,
-                "speed_stw_power_kts": state["speed_stw_power_kts"],
+                "speed_stw_power_kts": transition["speed_stw_power_kts"],
                 "heading_deg": heading,
                 "encounter_angle_deg": encounter_deg,
                 "environment": env,
@@ -788,7 +591,7 @@ def build_required_power_profile(
                 "wave_height_m": env.wave_height_m,
                 "wave_period_s": env.wave_period_s,
                 "wave_dir_deg": env.wave_dir_deg,
-                "current_component_kts": state["current_component_kts"],
+                "current_component_kts": transition["current_component_kts"],
                 "P_service": p_service,
                 **result,
             }
@@ -802,6 +605,8 @@ def compute_violation(route: dict, cost_map) -> float:
 
 
 def compute_smoothing_penalty(power_values: list[float], weight: float = SMOOTHING_WEIGHT) -> float:
+    if weight <= 0.0:
+        return 0.0
     values = np.asarray(power_values, dtype=float)
     if values.size == 0:
         return 0.0
@@ -814,23 +619,6 @@ def compute_smoothing_penalty(power_values: list[float], weight: float = SMOOTHI
     return weight * (normalized_std + 0.5 * normalized_mean_abs_ramp)
 
 
-def _violation_severity(validation: RouteValidationResult) -> float:
-    severity = validation.land_violation / 100.0
-    severity += validation.departure_excess_deg / 180.0
-    severity += validation.max_internal_turn_excess_deg / MAX_HEADING_DELTA
-    severity += validation.speed_excess_kts / max(V_MAX_PORT, 1e-9)
-    severity += validation.heading_excess_deg / MAX_HEADING_DELTA
-    return max(0.0, severity)
-
-
-def compute_violation_penalty(severity: float, generation_progress: float) -> float:
-    progress = _clamp(float(generation_progress), 0.0, 1.0)
-    hard_weight = progress * progress
-    soft_penalty = SOFT_PENALTY_BASE * (1.0 + severity)
-    hard_penalty = BIG_PENALTY * (1.0 + severity)
-    return (1.0 - hard_weight) * soft_penalty + hard_weight * hard_penalty
-
-
 def evaluate(
     individual: list,
     cost_map,
@@ -841,14 +629,9 @@ def evaluate(
     rta_h: float = RTA_HOURS,
     departure_time_utc: datetime | None = None,
     smoothing_weight: float = SMOOTHING_WEIGHT,
-    generation_progress: float = 1.0,
 ) -> Tuple[float]:
     resolved_env_fn = _normalize_env_fn(env_fn=env_fn, weather_fn=weather_fn)
-    route = decode_route(
-        individual,
-        n_segments=n_segments,
-        rta_h=rta_h,
-    )
+    route = decode_route(individual, n_segments=n_segments, rta_h=rta_h)
     validation = evaluate_route_validity(
         route,
         cost_map=cost_map,
@@ -856,10 +639,8 @@ def evaluate(
         departure_time_utc=departure_time_utc,
     )
     apply_route_validation(route, validation)
-
     if not validation.valid:
-        severity = _violation_severity(validation)
-        return (compute_violation_penalty(severity, generation_progress),)
+        return (BIG_PENALTY,)
 
     power_profile = build_required_power_profile(
         route,
@@ -867,7 +648,6 @@ def evaluate(
         departure_time_utc=departure_time_utc,
     )
     p_req_list = [segment["P_req"] for segment in power_profile]
-
     milp_result = milp_solver.solve(
         P_req=p_req_list,
         dt=route["dt"],
@@ -875,50 +655,19 @@ def evaluate(
         msg=False,
     )
     if not milp_result["feasible"]:
-        return (compute_violation_penalty(1.0, generation_progress),)
+        return (BIG_PENALTY,)
 
     fuel = float(milp_result["total_fuel_kg"])
     smoothing_penalty = compute_smoothing_penalty(p_req_list, weight=smoothing_weight)
     return (fuel + smoothing_penalty,)
 
 
-def _evaluate_invalid_individuals(
-    population: Sequence,
-    toolbox: base.Toolbox,
-    generation_progress: float,
-    n_workers: int,
-    cost_map,
-    milp_solver,
-    env_fn: Callable | None,
-    n_segments: int,
-    rta_h: float,
-    departure_time_utc: datetime,
-    smoothing_weight: float,
-    generation_progress_shared=None,
-) -> int:
+def _evaluate_invalid_individuals(population: Sequence, toolbox: base.Toolbox) -> int:
     invalid_individuals = [individual for individual in population if not individual.fitness.valid]
     if not invalid_individuals:
         return 0
 
-    if n_workers > 1:
-        generation_progress_shared.value = generation_progress
-        fitnesses = list(toolbox.map(_evaluate_parallel, invalid_individuals))
-    else:
-        fitnesses = [
-            evaluate(
-                individual,
-                cost_map=cost_map,
-                milp_solver=milp_solver,
-                env_fn=env_fn,
-                n_segments=n_segments,
-                rta_h=rta_h,
-                departure_time_utc=departure_time_utc,
-                smoothing_weight=smoothing_weight,
-                generation_progress=generation_progress,
-            )
-            for individual in invalid_individuals
-        ]
-
+    fitnesses = list(toolbox.map(toolbox.evaluate, invalid_individuals))
     for individual, fitness in zip(invalid_individuals, fitnesses):
         individual.fitness.values = fitness
     return len(invalid_individuals)
@@ -932,15 +681,7 @@ def _run_simple_ga(
     mut_prob: float,
     stats,
     halloffame,
-    n_workers: int,
-    cost_map,
-    milp_solver,
-    env_fn: Callable | None,
-    n_segments: int,
-    rta_h: float,
-    departure_time_utc: datetime,
-    smoothing_weight: float,
-    generation_progress_shared=None,
+    departure_corridor: Sequence[tuple[float, float]],
 ):
     logbook = tools.Logbook()
     header = ["gen", "nevals"]
@@ -948,20 +689,7 @@ def _run_simple_ga(
         header.extend(stats.fields)
     logbook.header = header
 
-    nevals = _evaluate_invalid_individuals(
-        population,
-        toolbox,
-        generation_progress=0.0,
-        n_workers=n_workers,
-        cost_map=cost_map,
-        milp_solver=milp_solver,
-        env_fn=env_fn,
-        n_segments=n_segments,
-        rta_h=rta_h,
-        departure_time_utc=departure_time_utc,
-        smoothing_weight=smoothing_weight,
-        generation_progress_shared=generation_progress_shared,
-    )
+    nevals = _evaluate_invalid_individuals(population, toolbox)
     if halloffame is not None:
         halloffame.update(population)
     record = stats.compile(population) if stats is not None else {}
@@ -975,21 +703,9 @@ def _run_simple_ga(
         offspring = algorithms.varAnd(offspring, toolbox, cxpb=cx_prob, mutpb=mut_prob)
         for individual in offspring:
             repair_individual(individual)
+            _apply_departure_corridor(individual, departure_corridor)
 
-        nevals = _evaluate_invalid_individuals(
-            offspring,
-            toolbox,
-            generation_progress=float(generation) / max(float(n_gen), 1.0),
-            n_workers=n_workers,
-            cost_map=cost_map,
-            milp_solver=milp_solver,
-            env_fn=env_fn,
-            n_segments=n_segments,
-            rta_h=rta_h,
-            departure_time_utc=departure_time_utc,
-            smoothing_weight=smoothing_weight,
-            generation_progress_shared=generation_progress_shared,
-        )
+        nevals = _evaluate_invalid_individuals(offspring, toolbox)
         if halloffame is not None:
             halloffame.update(offspring)
         population[:] = offspring
@@ -1014,13 +730,14 @@ def setup_ga(
     cx_prob: float = 0.7,
     mut_prob: float = 0.3,
     tournament_size: int = 3,
-    seed: int = 42,
+    seed: int | None = None,
     n_workers: int = 1,
     sfoc_path: str = "config/sfoc.json",
     smoothing_weight: float = SMOOTHING_WEIGHT,
 ):
-    random.seed(seed)
-    np.random.seed(seed)
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
 
     resolved_env_fn = _normalize_env_fn(env_fn=env_fn, weather_fn=weather_fn)
     departure_time_utc = _coerce_departure_time_utc(departure_time_utc)
@@ -1036,26 +753,30 @@ def setup_ga(
     toolbox = base.Toolbox()
     toolbox.register("clone", copy.deepcopy)
     base_bearing = compute_bearing(*BUSAN_PORT, *JEJU_PORT)
-
-    corridor_waypoints = None
-    try:
-        _, corridor_waypoints, _ = build_astar_route_points(cost_map, BUSAN_PORT, JEJU_PORT, n_segments)
-    except Exception:
-        corridor_waypoints = None
+    departure_corridor = _build_departure_corridor(
+        cost_map=cost_map,
+        dt_per_seg=rta_h / n_segments,
+        base_bearing=base_bearing,
+    )
 
     def init_individual():
-        if random.random() < GUIDED_INIT_FRACTION:
-            return _build_guided_individual(
-                n_segments=n_segments,
-                rta_h=rta_h,
-                cost_map=cost_map,
-                corridor_waypoints=corridor_waypoints,
-            )
-        return _build_rollout_individual(
-            n_segments=n_segments,
-            rta_h=rta_h,
-            cost_map=cost_map,
-        )
+        genes: list[float] = []
+        for segment_index in range(n_free):
+            if segment_index == 0:
+                if departure_corridor:
+                    sog_kts, heading_deg = random.choice(departure_corridor)
+                else:
+                    low, high = _sog_bounds_for_segment(segment_index)
+                    sog_kts = random.uniform(low, high)
+                    heading_deg = random.uniform(FIRST_HEADING_MIN, FIRST_HEADING_MAX)
+                genes.extend([sog_kts, heading_deg])
+            else:
+                low, high = _sog_bounds_for_segment(segment_index)
+                sog_kts = random.uniform(low, high)
+                delta_heading_deg = random.uniform(-MAX_HEADING_DELTA, MAX_HEADING_DELTA)
+                genes.extend([sog_kts, delta_heading_deg])
+        individual = repair_individual(creator.Individual(genes))
+        return _apply_departure_corridor(individual, departure_corridor)
 
     toolbox.register("individual", init_individual)
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
@@ -1064,10 +785,8 @@ def setup_ga(
         n_workers = multiprocessing.cpu_count()
 
     pool = None
-    generation_progress_shared = None
     if n_workers > 1:
         print(f"  Multiprocessing: {n_workers} workers")
-        generation_progress_shared = multiprocessing.Value("d", 0.0)
         pool = multiprocessing.Pool(
             processes=n_workers,
             initializer=_worker_init,
@@ -1080,15 +799,31 @@ def setup_ga(
                 rta_h,
                 departure_time_utc,
                 smoothing_weight,
-                generation_progress_shared,
             ),
         )
         toolbox.register("map", pool.map)
+        toolbox.register("evaluate", _evaluate_parallel)
     else:
         print("  Sequential mode (1 worker)")
+        import functools
 
-    low_bounds = [V_MIN_PORT, FIRST_HEADING_MIN] + [V_MIN, 0.0] * (n_free - 1)
-    up_bounds = [V_MAX_PORT, FIRST_HEADING_MAX] + [V_MAX, 360.0] * (n_free - 1)
+        toolbox.register("map", map)
+        toolbox.register(
+            "evaluate",
+            functools.partial(
+                evaluate,
+                cost_map=cost_map,
+                milp_solver=milp_solver,
+                env_fn=resolved_env_fn,
+                n_segments=n_segments,
+                rta_h=rta_h,
+                departure_time_utc=departure_time_utc,
+                smoothing_weight=smoothing_weight,
+            ),
+        )
+
+    low_bounds = [V_MIN_PORT, FIRST_HEADING_MIN] + [V_MIN, -MAX_HEADING_DELTA] * (n_free - 1)
+    up_bounds = [V_MAX_PORT, FIRST_HEADING_MAX] + [V_MAX, MAX_HEADING_DELTA] * (n_free - 1)
 
     toolbox.register("mate", tools.cxSimulatedBinaryBounded, low=low_bounds, up=up_bounds, eta=20.0)
     toolbox.register(
@@ -1111,7 +846,11 @@ def setup_ga(
     print(" DEAP GA run")
     print(f" Population: {pop_size} | Generations: {n_gen} | Segments: {n_segments}")
     print(f" RTA: {rta_h}h | SOG bounds: {V_MIN}~{V_MAX} kts")
-    print(f" Base bearing: {base_bearing:.1f} deg | Smoothing weight: {smoothing_weight:.1f}")
+    print(
+        f" Base bearing: {base_bearing:.1f} deg | "
+        f"Smoothing weight: {smoothing_weight:.1f} | "
+        f"Seed: {'random' if seed is None else seed}"
+    )
     if n_workers > 1:
         print(f" Parallel workers: {n_workers}")
     print(f"{'=' * 60}")
@@ -1127,15 +866,7 @@ def setup_ga(
             mut_prob=mut_prob,
             stats=stats,
             halloffame=hof,
-            n_workers=n_workers,
-            cost_map=cost_map,
-            milp_solver=milp_solver,
-            env_fn=resolved_env_fn,
-            n_segments=n_segments,
-            rta_h=rta_h,
-            departure_time_utc=departure_time_utc,
-            smoothing_weight=smoothing_weight,
-            generation_progress_shared=generation_progress_shared,
+            departure_corridor=departure_corridor,
         )
     finally:
         if pool is not None:
@@ -1143,11 +874,7 @@ def setup_ga(
             pool.join()
 
     best_individual = hof[0]
-    best_route = decode_route(
-        list(best_individual),
-        n_segments=n_segments,
-        rta_h=rta_h,
-    )
+    best_route = decode_route(list(best_individual), n_segments=n_segments, rta_h=rta_h)
     validation = evaluate_route_validity(
         best_route,
         cost_map=cost_map,

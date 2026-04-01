@@ -77,6 +77,11 @@ class WaveResistanceCalculator:
             poly_fr = (-1.377 * fr * fr + 1.157 * fr) * abs(math.cos(calc_alpha))
             poly_head = 0.618 * (13.0 + math.cos(2.0 * calc_alpha)) / 14.0
             omega_bar = w_term1 * w_term2 * (poly_fr + poly_head) * omega
+            # Negative omega_bar is non-physical in this response model and
+            # can produce complex values for non-integer powers. Clamp it into
+            # the positive real domain so the motion-induced term smoothly
+            # vanishes instead of crashing.
+            omega_bar_safe = max(float(omega_bar), 1e-9)
 
             if calc_alpha <= math.pi / 2.0 + 1e-6:
                 term_base = (ship.Beam / ship.Draft) ** -1 * (1.0 + 2.0 * math.cos(calc_alpha)) / 3.0
@@ -98,14 +103,14 @@ class WaveResistanceCalculator:
                     a2 = (fr_rel**1.5) * math.exp(-3.5 * fr_rel)
 
             shape_param = ship.Lbp * ship.Cb / ship.Beam
-            b1 = 11.0 if omega_bar < 1.0 else -8.5
+            b1 = 11.0 if omega_bar_safe < 1.0 else -8.5
             d1 = 566.0 * (shape_param ** -2.66)
-            if omega_bar >= 1.0:
+            if omega_bar_safe >= 1.0:
                 d1 *= -4.0
-            exponent_val = (b1 / d1) * (1.0 - omega_bar**d1)
+            exponent_val = (b1 / d1) * (1.0 - omega_bar_safe**d1)
             if math.isnan(exponent_val) or math.isinf(exponent_val):
                 exponent_val = 0.0
-            shape_func = (omega_bar**b1) * math.exp(exponent_val)
+            shape_func = (omega_bar_safe**b1) * math.exp(exponent_val)
             r_awm = (
                 3859.2
                 * self.RHO_SEAWATER
