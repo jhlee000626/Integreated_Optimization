@@ -15,9 +15,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from Verification.common import ensure_output_dir, load_era5_weather, solve_route_schedule
+from Verification.common import ensure_output_dir, load_marine_environment, solve_route_schedule
 from src.grid.cost_map import build_cost_map
-from src.optimizer.ga_engine import N_SEGMENTS, setup_ga
+from src.optimizer.ga_engine import N_SEGMENTS, RTA_HOURS, setup_ga
 from src.visualization.plotter import plot_convergence, plot_optimal_route, plot_power_schedule, plot_weather_map
 
 
@@ -41,14 +41,16 @@ def main():
     print("=" * 60)
 
     out_dir = ensure_output_dir("case2")
-    weather_loader, weather_fn = load_era5_weather(time_index=0)
+    env_loader, env_fn, departure_time_utc = load_marine_environment()
     try:
         cost_map = build_cost_map(resolution=0.01)
         ga_result = setup_ga(
             cost_map=cost_map,
             milp_solver=EnergyObjectiveSolver(),
-            weather_fn=weather_fn,
+            env_fn=env_fn,
+            departure_time_utc=departure_time_utc,
             n_segments=N_SEGMENTS,
+            rta_h=RTA_HOURS,
             pop_size=60,
             n_gen=60,
             seed=42,
@@ -56,7 +58,12 @@ def main():
         )
 
         route = ga_result["best_route"]
-        milp, power_profile, milp_result = solve_route_schedule(route, weather_fn, initial_soc=0.7)
+        milp, power_profile, milp_result = solve_route_schedule(
+            route,
+            env_fn,
+            departure_time_utc,
+            initial_soc=0.7,
+        )
 
         print(f"  Energy objective value: {ga_result['best_fitness']:.3f}")
         if milp_result["feasible"]:
@@ -65,12 +72,12 @@ def main():
             print("  MILP infeasible")
 
         plot_optimal_route(route, cost_map, save_dir=out_dir)
-        plot_weather_map(weather_fn, cost_map, route_wps=route["waypoints"], save_dir=out_dir)
+        plot_weather_map(env_fn, cost_map, route_wps=route["waypoints"], save_dir=out_dir, when_utc=departure_time_utc)
         plot_convergence(ga_result["logbook"], save_dir=out_dir)
         if milp_result["feasible"]:
             plot_power_schedule(milp_result, save_dir=out_dir)
     finally:
-        weather_loader.close()
+        del env_loader
 
 
 if __name__ == "__main__":

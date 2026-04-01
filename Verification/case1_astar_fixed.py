@@ -20,12 +20,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from Verification.common import ensure_output_dir, load_era5_weather, make_milp_solver
+from Verification.common import ensure_output_dir, load_marine_environment, make_milp_solver
 from src.grid.cost_map import build_cost_map
 from src.grid.no_go_zone import BUSAN_PORT, JEJU_PORT
-from src.optimizer.ga_engine import N_SEGMENTS, RTA_HOURS, compute_heading, haversine_nm
-from src.resistance.kwon_method import compute_P_req
-from src.ship.kcs_specs import POWER_MODEL, SERVICE_LOAD
+from src.optimizer.ga_engine import N_SEGMENTS, RTA_HOURS, build_required_power_profile, compute_heading, haversine_nm
 from src.visualization.plotter import plot_optimal_route, plot_power_schedule, plot_weather_map
 
 
@@ -100,6 +98,7 @@ def build_fixed_route(waypoints, base_speed_knots):
         "dt": [DT_HOURS] * N_SEGMENTS,
         "distances_nm": [],
         "valid": True,
+        "valid_departure_heading": True,
         "valid_speed": True,
         "valid_heading": True,
         "last_speed": 0.0,
@@ -125,41 +124,18 @@ def build_fixed_route(waypoints, base_speed_knots):
 
     route["last_speed"] = route["speeds"][-1]
     route["final_heading_delta"] = route["delta_headings"][-1]
+    route["nodes"] = [
+        {
+            "lat": wp[0],
+            "lon": wp[1],
+            "time_h": idx * DT_HOURS,
+            "time_utc": None,
+            "speed_out_kts": route["speeds"][idx] if idx < N_SEGMENTS else None,
+            "heading_out_deg": route["headings"][idx] if idx < N_SEGMENTS else None,
+        }
+        for idx, wp in enumerate(route["waypoints"])
+    ]
     return route
-
-
-def build_power_profile(route, weather_fn):
-    p_req_list = []
-    for idx in range(N_SEGMENTS):
-        wp_from = route["waypoints"][idx]
-        wp_to = route["waypoints"][idx + 1]
-        heading = route["headings"][idx]
-        speed = route["speeds"][idx]
-
-        mid_lat = (wp_from[0] + wp_to[0]) / 2.0
-        mid_lon = (wp_from[1] + wp_to[1]) / 2.0
-        wind_speed, wind_dir = weather_fn(mid_lat, mid_lon)
-        encounter = (wind_dir - heading + 180.0) % 360.0
-        if encounter > 180.0:
-            encounter = 360.0 - encounter
-
-        if idx == 0:
-            phase = "departure"
-        elif idx == N_SEGMENTS - 1:
-            phase = "approach"
-        else:
-            phase = "cruising"
-
-        power = compute_P_req(
-            v_ship_knots=speed,
-            v_wind_ms=wind_speed,
-            encounter_angle_deg=encounter,
-            a1=POWER_MODEL["a1"],
-            P_service=SERVICE_LOAD[phase],
-        )
-        p_req_list.append(power["P_req"])
-
-    return p_req_list
 
 
 def main():
@@ -168,7 +144,7 @@ def main():
     print("=" * 60)
 
     out_dir = ensure_output_dir("case1")
-    weather_loader, weather_fn = load_era5_weather(time_index=0)
+    env_loader, env_fn, departure_time_utc = load_marine_environment()
     try:
         cost_map = build_cost_map(resolution=0.1)
         graph = build_astar_graph(cost_map)
@@ -184,7 +160,12 @@ def main():
         base_speed = total_dist_nm / (DT_HOURS * (N_SEGMENTS - 0.6))
 
         route = build_fixed_route(waypoints, base_speed)
-        p_req_list = build_power_profile(route, weather_fn)
+        power_profile = build_required_power_profile(
+            route,
+            env_fn=env_fn,
+            departure_time_utc=departure_time_utc,
+        )
+        p_req_list = [segment["P_req"] for segment in power_profile]
 
         milp = make_milp_solver()
         milp_result = milp.solve(P_req=p_req_list, dt=route["dt"], initial_SOC=0.7, msg=False)
@@ -199,11 +180,17 @@ def main():
             print("  MILP infeasible")
 
         plot_optimal_route(route, cost_map, save_dir=out_dir)
-        plot_weather_map(weather_fn, cost_map, route_wps=route["waypoints"], save_dir=out_dir)
+        plot_weather_map(
+            env_fn,
+            cost_map,
+            route_wps=route["waypoints"],
+            save_dir=out_dir,
+            when_utc=departure_time_utc,
+        )
         if milp_result["feasible"]:
             plot_power_schedule(milp_result, save_dir=out_dir)
     finally:
-        weather_loader.close()
+        del env_loader
 
 
 if __name__ == "__main__":

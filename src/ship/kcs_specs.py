@@ -1,51 +1,68 @@
 """
-KCS (KRISO Container Ship) 제원 및 전력계통 파라미터
-===================================================
-- 선체: KCS 표준 선형 
-- 동력: 40MW급 순수 전기추진 시스템 (가정)
+Ship and power-system reference data for the KCS test vessel.
 """
+
+from __future__ import annotations
 
 import math
 
-# =============================================================================
-# 1. 선체 제원 (Hull Data)
-# =============================================================================
 
 KCS_HULL = {
-    "Lpp": 230.0,                # 수선간장 Length Between Perpendiculars (m)
-    "B": 32.2,                   # 폭 Beam (m)
-    "T": 10.8,                   # 흘수 Draft (m)
-    "displacement_vol": 52030.0, # 배수 용적 (m^3)
-    "Cb": 0.651,                 # 방형계수 Block Coefficient
-    "g": 9.81,                   # 중력가속도 (m/s^2)
+    "Lpp": 230.0,
+    "Lbp": 230.0,
+    "Lwl": 232.5,
+    "B": 32.2,
+    "Beam": 32.2,
+    "T": 10.8,
+    "Draft": 10.8,
+    "Depth": 19.0,
+    "displacement_vol": 52030.0,
+    "VolumeOfDisplacement": 52030.0,
+    "Cb": 0.651,
+    "CM": 0.985,
+    "Cm": 0.985,
+    "Surface_area": 9530.0,
+    "S": 9530.0,
+    "LCB": -1.48,
+    "LCB_Percent": -1.48,
+    "g": 9.81,
 }
 
-# =============================================================================
-# 2. 추진 출력 약산식 계수
-# =============================================================================
+KCS_PROPULSION = {
+    "PropellerDiameter": 7.9,
+    "AEAO": 0.65,
+    "NumberOfBlades": 5,
+    "N_MCR": 104.0,
+    "DesignSpeed": 24.0,
+    "eta_drive": 0.98,
+    "ContainerHeight": 2.6,
+    "ContainerTiersOnDeck": 9,
+    "SternShapeCoefficient": 10.0,
+}
+
+KCS_ISO15016 = {
+    **KCS_HULL,
+    **KCS_PROPULSION,
+}
 
 POWER_MODEL = {
-    "a1": 0.00238,  # 추진 계수 A₁
-    "a2_exp": 3,  # 속도 지수 (V^3)
+    "a1": 0.00238,
+    "a2_exp": 3,
 }
-
-# =============================================================================
-# 3. 디젤 발전기 (DG) 제원
-# =============================================================================
 
 DG_SPECS = {
     "DG1": {
-        "P_max": 14.4,       # MW
-        "ramp_rate": 0.5,    # 증감발률
-        "min_up": 0.5,         # 최소 기동 유지 시간 (h)
-        "min_down": 0.5,       # 최소 정지 유지 시간 (h)
-        "cost_start": 170,   # 시동 비용 ($)
+        "P_max": 14.4,
+        "ramp_rate": 0.5,
+        "min_up": 0.5,
+        "min_down": 0.5,
+        "cost_start": 170,
     },
     "DG2": {
         "P_max": 14.4,
         "ramp_rate": 0.5,
-        "min_up": 1,
-        "min_down": 1,
+        "min_up": 1.0,
+        "min_down": 1.0,
         "cost_start": 170,
     },
     "DG3": {
@@ -57,44 +74,32 @@ DG_SPECS = {
     },
 }
 
-DG_MIN_LOAD_RATIO = 0.25  # 최소 부하율 30%
-
-# =============================================================================
-# 4. ESS (에너지 저장 장치) 제원 (현재 임시 논문꺼 차용) ---> 앞으로 Corvus Energy사의 Blue Whale 30MWh용량 적용 예정
-# =============================================================================
+DG_MIN_LOAD_RATIO = 0.25
 
 ESS_SPECS = {
-    "P_c_max": 15.0,    # 최대 충전 전력 (MW)
-    "P_dc_max": 15.0,   # 최대 방전 전력 (MW)
-    "capacity": 30.0,   # 배터리 용량 (MWh)
+    "P_c_max": 15.0,
+    "P_dc_max": 15.0,
+    "capacity": 30.0,
     "SOC_max": 0.90,
     "SOC_min": 0.30,
-    "eta_c": 0.95,      # 충전 효율
-    "eta_dc": 0.97,     # 방전 효율
+    "eta_c": 0.95,
+    "eta_dc": 0.97,
 }
-
-# =============================================================================
-# 5. 서비스 부하 (비추진 전력) (현재 임시 논문꺼 차용)
-# =============================================================================
 
 SERVICE_LOAD = {
-    "departure": 8.69,   # 출항 시 (MW)
-    "approach": 8.69,    # 입접안 시 (MW)
-    "berthing": 3.50,    # 정박 시 (MW)
-    "cruising": 9.845,   # 순항 시 (MW)
+    "departure": 8.69,
+    "approach": 8.69,
+    "berthing": 3.50,
+    "cruising": 9.845,
 }
 
-# =============================================================================
-# 6. 항해 파라미터 (출항 시 속도 감속)
-# =============================================================================
-
 NAV_PARAMS = {
-    "gamma": 0.7,              # 출항/입항 속도 비율
-    "speed_range": (5, 24),   # 운항 속도 범위 (knots)
+    "gamma": 0.7,
+    "speed_range": (5.0, 24.0),
 }
 
 
 def get_froude_number(v_knots: float) -> float:
-    """선속(knots)으로부터 Froude Number 계산"""
+    """Return the Froude number for the reference hull."""
     v_ms = v_knots * 0.514444
     return v_ms / math.sqrt(KCS_HULL["g"] * KCS_HULL["Lpp"])

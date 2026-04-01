@@ -10,7 +10,7 @@ import math
 from typing import List, Tuple
 
 # ── 프로젝트 내부 모듈 ──
-from src.resistance.kwon_method import compute_P_req
+from src.resistance.modified_dpm import compute_P_req
 from src.ship.kcs_specs import POWER_MODEL, SERVICE_LOAD, NAV_PARAMS
 
 # =============================================================================
@@ -289,6 +289,8 @@ def calculate_fitness(
             encounter_angle_deg=encounter_angle,
             a1=POWER_MODEL["a1"],
             P_service=P_service,
+            heading_deg=heading,
+            wind_dir_deg=weather["wind_dir_deg"],
         )
 
         # 3h. 구간 정보 저장

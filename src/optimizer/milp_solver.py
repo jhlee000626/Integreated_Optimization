@@ -12,12 +12,24 @@ MILP 발전기 + ESS 스케줄링 솔버 (PuLP + CBC)
 """
 
 import json
+import os
+import tempfile
 from typing import List, Dict, Optional, Tuple
 
 from pulp import (
     LpProblem, LpMinimize, LpVariable, LpBinary,
-    LpStatus, lpSum, value, PULP_CBC_CMD
+    LpStatus, lpSum, value, PULP_CBC_CMD, CPLEX_CMD, listSolvers
 )
+
+
+class SafeCPLEX_CMD(CPLEX_CMD):
+    """Ignore shared log cleanup races when multiple CPLEX_CMD solvers run."""
+
+    def silent_remove(self, file):
+        try:
+            super().silent_remove(file)
+        except PermissionError:
+            pass
 
 
 # SFOC 데이터 로더
@@ -30,7 +42,7 @@ def load_sfoc(json_path: str) -> Dict:
         data = json.load(f)
     return data
 
-
+# SFOC 함수 PWL 근사
 def fuel_consumption(P: float, alpha1: float, alpha2: float, alpha3: float) -> float:
     """
     이차 연료 소비 함수. FC(P) = α₁P² + α₂P + α₃ (kg/h)
@@ -80,6 +92,8 @@ class MILPSolver:
         self,
         sfoc_json_path: str = "config/sfoc.json",
         n_pwl_segments: int = 5,
+        solver_name: str = "cplex",
+        dump_penalty_per_mwh: float = 10000.0,
     ):
         """
         Parameters
@@ -88,6 +102,8 @@ class MILPSolver:
             SFOC 계수 JSON 파일 경로
         n_pwl_segments : int
             PWL 근사 세그먼트 수 (기본 5)
+        solver_name : str
+            사용할 MILP solver. "cplex", "cbc", "auto" 지원.
         """
         # ── DG / ESS 사양 (kcs_specs.py에서 Import) ──
         from src.ship.kcs_specs import DG_SPECS, DG_MIN_LOAD_RATIO, ESS_SPECS
@@ -101,6 +117,9 @@ class MILPSolver:
         # ── SFOC 로드 ──
         self.sfoc_data = load_sfoc(sfoc_json_path)
         self.n_pwl = n_pwl_segments
+        self.solver_name = solver_name.lower()
+        self.dump_penalty_per_mwh = dump_penalty_per_mwh
+        self.available_solvers = set(listSolvers(onlyAvailable=True))
 
         # ── PWL Breakpoints 사전 계산 ──
         self.pwl_breakpoints = {}
@@ -113,6 +132,40 @@ class MILPSolver:
                 sfoc["alpha1"], sfoc["alpha2"], sfoc["alpha3"],
                 self.n_pwl,
             )
+
+    def _create_solver(self, time_limit_sec: int, msg: bool):
+        """
+        Build the requested PuLP backend, preferring CPLEX when available.
+        """
+        solver_name = self.solver_name
+
+        if solver_name == "auto":
+            solver_name = "cplex" if "CPLEX_CMD" in self.available_solvers else "cbc"
+
+        if solver_name == "cplex":
+            if "CPLEX_CMD" in self.available_solvers:
+                log_path = os.path.join(
+                    tempfile.gettempdir(),
+                    f"pulp_cplex_{os.getpid()}_{id(self)}.log",
+                )
+                return (
+                    SafeCPLEX_CMD(
+                        msg=msg,
+                        timeLimit=time_limit_sec,
+                        threads=1,
+                        logPath=log_path,
+                    ),
+                    "CPLEX_CMD",
+                )
+            return PULP_CBC_CMD(msg=msg, timeLimit=time_limit_sec), "PULP_CBC_CMD"
+
+        if solver_name == "cbc":
+            return PULP_CBC_CMD(msg=msg, timeLimit=time_limit_sec), "PULP_CBC_CMD"
+
+        raise ValueError(
+            f"Unsupported solver_name: {self.solver_name}. "
+            "Use one of: 'cplex', 'cbc', 'auto'."
+        )
 
     # ─────────────────────────────────────────────────────────────────
     # 메인 풀이 함수
@@ -255,6 +308,10 @@ class MILPSolver:
             lpSum(
                 FC_pwl[dg, t] * dt[t]
                 for dg in self.dg_names for t in range(T)
+            )
+            + lpSum(
+                self.dump_penalty_per_mwh * P_dump[t] * dt[t]
+                for t in range(T)
             )
             + lpSum(
                 self.dg_specs[dg]["cost_start"] * y[dg, t]
@@ -412,9 +469,9 @@ class MILPSolver:
         # =================================================================
         # 풀이
         # =================================================================
-        solver = PULP_CBC_CMD(
+        solver, solver_backend = self._create_solver(
+            time_limit_sec=time_limit_sec,
             msg=msg,
-            timeLimit=time_limit_sec,
         )
         prob.solve(solver)
 
@@ -431,6 +488,7 @@ class MILPSolver:
                 "total_fuel_kg": float("inf"),
                 "total_start_cost": float("inf"),
                 "objective_value": float("inf"),
+                "solver_backend": solver_backend,
                 "schedule": [],
                 "summary": {},
             }
@@ -439,6 +497,8 @@ class MILPSolver:
         schedule = []
         total_fuel = 0.0
         total_start_cost = 0.0
+        total_dump_energy = 0.0
+        total_dump_penalty = 0.0
 
         for t in range(T):
             step = {
@@ -450,6 +510,8 @@ class MILPSolver:
                 "P_dump_MW": value(P_dump[t]),
                 "SOC": value(SOC[t]),
             }
+            total_dump_energy += step["P_dump_MW"] * dt[t]
+            total_dump_penalty += self.dump_penalty_per_mwh * step["P_dump_MW"] * dt[t]
 
             for dg in self.dg_names:
                 p_val = value(P_dg[dg, t])
@@ -474,9 +536,18 @@ class MILPSolver:
             "status": status,
             "total_fuel_kg": total_fuel,
             "total_start_cost": total_start_cost,
+            "total_dump_energy_mwh": total_dump_energy,
+            "total_dump_penalty": total_dump_penalty,
             "objective_value": value(prob.objective),
+            "solver_backend": solver_backend,
             "schedule": schedule,
-            "summary": self._build_summary(schedule, total_fuel, total_start_cost),
+            "summary": self._build_summary(
+                schedule,
+                total_fuel,
+                total_start_cost,
+                total_dump_energy,
+                total_dump_penalty,
+            ),
         }
 
     # ─────────────────────────────────────────────────────────────────
@@ -510,6 +581,8 @@ class MILPSolver:
         schedule: List[dict],
         total_fuel: float,
         total_start_cost: float,
+        total_dump_energy: float,
+        total_dump_penalty: float,
     ) -> dict:
         """결과 요약 생성."""
         T = len(schedule)
@@ -530,6 +603,8 @@ class MILPSolver:
             "total_voyage_h": total_hours,
             "total_fuel_kg": total_fuel,
             "total_start_cost_usd": total_start_cost,
+            "total_dump_energy_mwh": total_dump_energy,
+            "total_dump_penalty": total_dump_penalty,
             "dg_running_hours": dg_hours,
             "dg_fuel_kg": dg_fuel,
             "dg_start_count": dg_starts,

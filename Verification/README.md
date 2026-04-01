@@ -24,13 +24,18 @@ These scripts are separate from `tests/test_ga.py`:
 
 ## Weather Data Policy
 
-- Cases 1, 2, 3, and 5 use `data/era5/era5_wind_2024_01.nc`.
+- Cases 1, 2, 3, and 5 use the shared marine environment loader.
+- The loader expects:
+  - an ERA5 NetCDF containing `u10`, `v10`, `swh`, `mwp`, `mwd`
+  - a CMEMS NetCDF containing `uo`, `vo`
+  - overlapping UTC time windows between the two datasets
+- Dataset paths are auto-discovered from `data/era5` and `data/cmems`, or can be overridden with `MARINE_ERA5_PATH` and `MARINE_CMEMS_PATH`.
 - Case 4 uses synthetic weather on purpose.
 
 ## Shared Helpers
 
 - `Verification/common.py`
-  Shared paths, ERA5 loading, output directory creation, and route-to-MILP helper utilities.
+  Shared path resolution, marine environment loading, output directory creation, and route-to-MILP helper utilities.
 
 ## Notes
 

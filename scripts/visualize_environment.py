@@ -20,10 +20,10 @@ import matplotlib.colors as mcolors
 # 프로젝트 루트 경로 추가
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
+from src.weather import resolve_marine_dataset_paths
 
 # ─── 경로 설정 ───
-ERA5_PATH = os.path.join(PROJECT_ROOT, "data", "era5", "era5_wind_2024_01.nc")
-CMEMS_PATH = os.path.join(PROJECT_ROOT, "data", "cmems", "cmems_current.nc")
+ERA5_PATH, CMEMS_PATH = resolve_marine_dataset_paths(PROJECT_ROOT)
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 
 # ─── 공통 공간 범위 ───
