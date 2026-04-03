@@ -17,7 +17,7 @@ if PROJECT_ROOT not in sys.path:
 from Verification.common import VERIFICATION_COST_MAP_RESOLUTION, ensure_output_dir, make_milp_solver, solve_route_schedule
 from src.grid.cost_map import build_cost_map
 from src.optimizer.ga_engine import N_SEGMENTS, RTA_HOURS, setup_ga
-from src.visualization.plotter import plot_convergence, plot_optimal_route, plot_power_schedule, plot_weather_map
+from src.visualization.plotter import plot_convergence, plot_cost_map_route, plot_optimal_route, plot_power_schedule, plot_weather_map
 from src.weather.marine_environment import create_synthetic_environment
 
 
@@ -72,6 +72,7 @@ def main():
     else:
         print("  MILP infeasible under extreme weather")
 
+    plot_cost_map_route(route, cost_map, save_dir=out_dir)
     plot_optimal_route(route, cost_map, save_dir=out_dir)
     plot_weather_map(env_fn, cost_map, route_wps=route["waypoints"], save_dir=out_dir, when_utc=departure_time_utc)
     plot_convergence(ga_result["logbook"], save_dir=out_dir)

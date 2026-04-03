@@ -108,10 +108,10 @@ def plot_optimal_route(
             markersize=18, markeredgecolor='white', markeredgewidth=1.5, label='Jeju', zorder=10)
 
     # 컬러바
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, shrink=0.6, pad=0.02)
-    cbar.set_label("Speed (knots)", fontsize=11)
+    # sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    # sm.set_array([])
+    # cbar = fig.colorbar(sm, ax=ax, shrink=0.6, pad=0.02)
+    # cbar.set_label("Speed (knots)", fontsize=11)
 
     ax.set_xlabel("Longitude (°E)", fontsize=12)
     ax.set_ylabel("Latitude (°N)", fontsize=12)

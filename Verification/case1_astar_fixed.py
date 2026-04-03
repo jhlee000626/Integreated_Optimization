@@ -27,7 +27,7 @@ from src.grid.cost_map import build_cost_map
 from src.grid.pathfinding import build_astar_route_points
 from src.grid.no_go_zone import BUSAN_PORT, JEJU_PORT
 from src.optimizer.ga_engine import N_SEGMENTS, RTA_HOURS, build_required_power_profile, compute_heading, haversine_nm
-from src.visualization.plotter import plot_optimal_route, plot_power_schedule, plot_weather_map
+from src.visualization.plotter import plot_cost_map_route, plot_optimal_route, plot_power_schedule, plot_weather_map
 
 
 DT_HOURS = RTA_HOURS / N_SEGMENTS
@@ -136,6 +136,7 @@ def main():
         else:
             print("  MILP infeasible")
 
+        plot_cost_map_route(route, cost_map, save_dir=out_dir)
         plot_optimal_route(route, cost_map, save_dir=out_dir)
         plot_weather_map(
             env_fn,

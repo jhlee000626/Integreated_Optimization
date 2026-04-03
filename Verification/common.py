@@ -32,8 +32,8 @@ def load_marine_environment() -> Tuple[MarineEnvironmentLoader, Callable, dateti
     return loader, loader.get_environment_fn(), departure_time_utc
 
 
-def make_milp_solver() -> MILPSolver:
-    return MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5)
+def make_milp_solver(solver_name: str = "auto") -> MILPSolver:
+    return MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5, solver_name=solver_name)
 
 
 def solve_route_schedule(
@@ -41,8 +41,9 @@ def solve_route_schedule(
     env_fn: Callable,
     departure_time_utc: datetime,
     initial_soc: float = 0.7,
+    enable_sos2: bool = False,
 ):
-    milp = make_milp_solver()
+    milp = make_milp_solver(solver_name="cbc")
     power_profile = build_required_power_profile(
         route,
         env_fn=env_fn,
@@ -53,6 +54,7 @@ def solve_route_schedule(
         dt=route["dt"],
         initial_SOC=initial_soc,
         msg=False,
+        enable_sos2=enable_sos2,
     )
     return milp, power_profile, result
 

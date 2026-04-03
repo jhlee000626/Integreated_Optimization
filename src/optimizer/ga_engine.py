@@ -35,6 +35,12 @@ SMOOTHING_WEIGHT = 0.0
 DEPARTURE_CORRIDOR_HEADING_STEP_DEG = 2.0
 DEPARTURE_CORRIDOR_SPEED_STEP_KTS = 0.5
 DEPARTURE_CORRIDOR_MAX_CANDIDATES = 120
+MILP_INFEASIBLE_BASE = 100000.0
+MILP_POWER_EXCESS_WEIGHT = 40000.0
+MILP_ENERGY_DEFICIT_WEIGHT = 12000.0
+MILP_RAMP_EXCESS_WEIGHT = 6000.0
+LAST_SPEED_PENALTY_LINEAR = 2500.0
+LAST_SPEED_PENALTY_QUADRATIC = 1000.0
 
 
 @dataclass
@@ -422,7 +428,7 @@ def evaluate_route_validity(
 
     last_speed_stw = transitions[-1]["speed_stw_kts"] if transitions else float("nan")
     land_violation = compute_violation(route, cost_map) if cost_map is not None else 0.0
-    valid = valid_departure_heading and valid_speed and land_violation <= 0.0
+    valid = valid_departure_heading and land_violation <= 0.0
 
     return RouteValidationResult(
         valid=valid,
@@ -619,6 +625,67 @@ def compute_smoothing_penalty(power_values: list[float], weight: float = SMOOTHI
     return weight * (normalized_std + 0.5 * normalized_mean_abs_ramp)
 
 
+def compute_last_speed_penalty(last_speed_sog_kts: float) -> float:
+    if not math.isfinite(last_speed_sog_kts):
+        return BIG_PENALTY
+    if V_MIN_PORT <= last_speed_sog_kts <= V_MAX_PORT:
+        return 0.0
+
+    if last_speed_sog_kts < V_MIN_PORT:
+        deviation = V_MIN_PORT - last_speed_sog_kts
+    else:
+        deviation = last_speed_sog_kts - V_MAX_PORT
+
+    return (
+        LAST_SPEED_PENALTY_LINEAR * deviation
+        + LAST_SPEED_PENALTY_QUADRATIC * deviation * deviation
+    )
+
+
+def compute_milp_infeasible_surrogate(
+    p_req_list: Sequence[float],
+    dt: Sequence[float],
+    milp_solver,
+    initial_soc: float = 0.7,
+) -> float:
+    dg_specs = milp_solver.dg_specs
+    ess = milp_solver.ess
+
+    total_dg_power_cap = sum(float(spec["P_max"]) for spec in dg_specs.values())
+    total_supply_cap = total_dg_power_cap + float(ess["P_dc_max"])
+    power_excess_mwh = sum(
+        max(0.0, float(power) - total_supply_cap) * float(duration)
+        for power, duration in zip(p_req_list, dt)
+    )
+
+    total_required_energy = sum(float(power) * float(duration) for power, duration in zip(p_req_list, dt))
+    total_dg_energy_cap = total_dg_power_cap * sum(float(duration) for duration in dt)
+    ess_deliverable_energy = (
+        float(ess["capacity"])
+        * max(0.0, float(initial_soc) - float(ess["SOC_min"]))
+        * float(ess["eta_dc"])
+    )
+    energy_deficit_mwh = max(0.0, total_required_energy - total_dg_energy_cap - ess_deliverable_energy)
+
+    ramp_excess_mw = 0.0
+    ess_net_ramp_cap = float(ess["P_dc_max"]) + float(ess["P_c_max"])
+    for step_index in range(1, len(p_req_list)):
+        dg_ramp_cap = sum(
+            float(spec["ramp_rate"]) * float(spec["P_max"]) * float(dt[step_index])
+            for spec in dg_specs.values()
+        )
+        total_ramp_cap = dg_ramp_cap + ess_net_ramp_cap
+        load_delta = abs(float(p_req_list[step_index]) - float(p_req_list[step_index - 1]))
+        ramp_excess_mw += max(0.0, load_delta - total_ramp_cap)
+
+    return (
+        MILP_INFEASIBLE_BASE
+        + MILP_POWER_EXCESS_WEIGHT * power_excess_mwh
+        + MILP_ENERGY_DEFICIT_WEIGHT * energy_deficit_mwh
+        + MILP_RAMP_EXCESS_WEIGHT * ramp_excess_mw
+    )
+
+
 def evaluate(
     individual: list,
     cost_map,
@@ -641,6 +708,7 @@ def evaluate(
     apply_route_validation(route, validation)
     if not validation.valid:
         return (BIG_PENALTY,)
+    last_speed_penalty = compute_last_speed_penalty(validation.last_speed_sog_kts)
 
     power_profile = build_required_power_profile(
         route,
@@ -655,11 +723,19 @@ def evaluate(
         msg=False,
     )
     if not milp_result["feasible"]:
-        return (BIG_PENALTY,)
+        return (
+            compute_milp_infeasible_surrogate(
+                p_req_list=p_req_list,
+                dt=route["dt"],
+                milp_solver=milp_solver,
+                initial_soc=0.7,
+            )
+            + last_speed_penalty,
+        )
 
     fuel = float(milp_result["total_fuel_kg"])
     smoothing_penalty = compute_smoothing_penalty(p_req_list, weight=smoothing_weight)
-    return (fuel + smoothing_penalty,)
+    return (fuel + smoothing_penalty + last_speed_penalty,)
 
 
 def _evaluate_invalid_individuals(population: Sequence, toolbox: base.Toolbox) -> int:

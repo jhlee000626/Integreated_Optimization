@@ -87,11 +87,18 @@ ESS_SPECS = {
 }
 
 SERVICE_LOAD = {
-    "departure": 8.69,
-    "approach": 8.69,
-    "berthing": 3.50,
-    "cruising": 9.845,
+    "departure": 0.5,
+    "approach": 0.5,
+    "berthing": 0.5,
+    "cruising": 0.5,
 }
+
+# SERVICE_LOAD = {
+#     "departure": 8.69,
+#     "approach": 8.69,
+#     "berthing": 3.50,
+#     "cruising": 9.845,
+# }
 
 NAV_PARAMS = {
     "gamma": 0.7,

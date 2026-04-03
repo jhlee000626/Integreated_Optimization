@@ -26,6 +26,7 @@ from src.optimizer.ga_engine import (
 from src.optimizer.milp_solver import MILPSolver
 from src.visualization.plotter import (
     plot_convergence,
+    plot_cost_map_route,
     plot_optimal_route,
     plot_power_schedule,
     plot_weather_map,
@@ -80,7 +81,7 @@ def main():
     print("\n" + "=" * 60)
     print(" [Phase 3] MILP setup")
     print("=" * 60)
-    milp = MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5)
+    milp = MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5, solver_name="auto")
     print("  MILP ready")
 
     print("\n" + "=" * 60)
@@ -147,11 +148,12 @@ def main():
         departure_time_utc=departure_time_utc,
     )
     p_req_best = [segment["P_req"] for segment in power_profile]
-    milp_detail = milp.solve(P_req=p_req_best, dt=route["dt"], initial_SOC=0.7, msg=False)
+    milp_check = MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5, solver_name="cbc")
+    milp_detail = milp_check.solve(P_req=p_req_best, dt=route["dt"], initial_SOC=0.7, msg=False, enable_sos2=False)
     if milp_detail["feasible"]:
         print(f"  MILP pure fuel: {milp_detail['total_fuel_kg']:.1f} kg")
 
-    cmap.plot(save_path=os.path.join(OUTPUT_DIR, "cost_map_route.png"), route_wps=route["waypoints"])
+    plot_cost_map_route(route, cmap, save_dir=OUTPUT_DIR)
     plot_weather_map(env_fn, cmap, route_wps=route["waypoints"], save_dir=OUTPUT_DIR, when_utc=departure_time_utc)
     plot_optimal_route(route, cmap, save_dir=OUTPUT_DIR)
     plot_convergence(ga_result["logbook"], save_dir=OUTPUT_DIR)

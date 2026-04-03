@@ -22,6 +22,11 @@ from pulp import (
     LpStatus, lpSum, value, PULP_CBC_CMD, CPLEX_CMD, listSolvers
 )
 
+try:
+    from pulp import CPLEX_PY
+except ImportError:
+    CPLEX_PY = None
+
 
 class SafeCPLEX_CMD(CPLEX_CMD):
     """Ignore shared log cleanup races when multiple CPLEX_CMD solvers run."""
@@ -109,8 +114,7 @@ class MILPSolver:
         self,
         sfoc_json_path: str = "config/sfoc.json",
         n_pwl_segments: int = 5,
-        solver_name: str = "cplex",
-        dump_penalty_per_mwh: float = 10000.0,
+        solver_name: str = "cbc",
     ):
         """
         Parameters
@@ -135,7 +139,6 @@ class MILPSolver:
         self.sfoc_data = load_sfoc(sfoc_json_path)
         self.n_pwl = n_pwl_segments
         self.solver_name = solver_name.lower()
-        self.dump_penalty_per_mwh = dump_penalty_per_mwh
         self.available_solvers = set(listSolvers(onlyAvailable=True))
 
         # ── PWL Breakpoints 사전 계산 ──
@@ -152,12 +155,26 @@ class MILPSolver:
 
     def _create_solver(self, time_limit_sec: int, msg: bool):
         """
-        Build the requested PuLP backend, preferring CPLEX when available.
+        Build the requested PuLP backend.
+        Supported: 'cbc', 'cplex', 'cplex_py', 'auto'.
         """
         solver_name = self.solver_name
 
         if solver_name == "auto":
-            solver_name = "cplex" if "CPLEX_CMD" in self.available_solvers else "cbc"
+            if "CPLEX_PY" in self.available_solvers:
+                solver_name = "cplex_py"
+            elif "CPLEX_CMD" in self.available_solvers:
+                solver_name = "cplex"
+            else:
+                solver_name = "cbc"
+
+        if solver_name == "cplex_py":
+            if CPLEX_PY is not None and "CPLEX_PY" in self.available_solvers:
+                return (
+                    CPLEX_PY(msg=msg, timeLimit=time_limit_sec),
+                    "CPLEX_PY",
+                )
+            return PULP_CBC_CMD(msg=msg, timeLimit=time_limit_sec), "PULP_CBC_CMD"
 
         if solver_name == "cplex":
             if "CPLEX_CMD" in self.available_solvers:
@@ -181,7 +198,7 @@ class MILPSolver:
 
         raise ValueError(
             f"Unsupported solver_name: {self.solver_name}. "
-            "Use one of: 'cplex', 'cbc', 'auto'."
+            "Use one of: 'cplex', 'cplex_py', 'cbc', 'auto'."
         )
 
     # ─────────────────────────────────────────────────────────────────
@@ -196,6 +213,7 @@ class MILPSolver:
         initial_u: Optional[Dict[str, int]] = None,
         time_limit_sec: int = 120,
         msg: bool = False,
+        enable_sos2: bool = False,
     ) -> Dict:
         """
         MILP 발전기 + ESS 스케줄링 문제 풀이.
@@ -214,6 +232,11 @@ class MILPSolver:
             CBC 솔버 시간 제한 (초)
         msg : bool
             솔버 로그 출력 여부
+        enable_sos2 : bool
+            SOS2 인접성 제약 활성화 여부. False(기본)이면 PWL
+            convex combination만 사용하여 빠르게 풀고, True이면
+            δ 이진 변수를 추가하여 엄밀한 PWL 근사를 보장.
+            SFOC가 볼록 함수일 때는 False에서도 최적해 동일.
 
         Returns
         -------
@@ -295,12 +318,6 @@ class MILPSolver:
             for t in range(T)
         }
 
-        # Dump Load (잉여 전력 소모 저항기) (MW) — 연속
-        P_dump = {
-            t: LpVariable(f"P_dump_{t}", lowBound=0)
-            for t in range(T)
-        }
-
         # PWL 보조 변수: λ (convex combination weights)
         # λ[dg, t, k] — breakpoint k의 가중치
         lam = {
@@ -309,6 +326,19 @@ class MILPSolver:
             for t in range(T)
             for k in range(self.n_pwl + 1)
         }
+
+        # SOS2 구간 선택 이진 변수: δ[dg, t, s]
+        # s = 0, ..., n_pwl-1 (breakpoint 사이 구간)
+        # 인접한 두 breakpoint의 λ만 양수가 되도록 강제
+        # enable_sos2=False이면 생성하지 않아 변수/제약 수 절감
+        delta = {}
+        if enable_sos2:
+            delta = {
+                (dg, t, s): LpVariable(f"delta_{dg}_{t}_{s}", cat=LpBinary)
+                for dg in self.dg_names
+                for t in range(T)
+                for s in range(self.n_pwl)
+            }
 
         # =================================================================
         # 목적 함수: min Σ_t [ Σ_i FC_PWL_i(t)·Δt + C_start·y_it ]
@@ -327,10 +357,6 @@ class MILPSolver:
                 for dg in self.dg_names for t in range(T)
             )
             + lpSum(
-                self.dump_penalty_per_mwh * P_dump[t] * dt[t]
-                for t in range(T)
-            )
-            + lpSum(
                 self.dg_specs[dg]["cost_start"] * y[dg, t]
                 for dg in self.dg_names for t in range(T)
             ),
@@ -344,10 +370,10 @@ class MILPSolver:
         for t in range(T):
 
             # ─── (1) 전력 수급 균형 ───
-            # Σ P_DG_it + P_dc_t - P_c_t - P_dump_t = P_req_t
+            # Σ P_DG_it + P_dc_t - P_c_t = P_req_t
             prob += (
                 lpSum(P_dg[dg, t] for dg in self.dg_names)
-                + P_dc[t] - P_c[t] - P_dump[t] == P_req[t],
+                + P_dc[t] - P_c[t] == P_req[t],
                 f"PowerBalance_{t}"
             )
 
@@ -426,6 +452,37 @@ class MILPSolver:
                     ) == u[dg, t],
                     f"PWL_sum_{dg}_{t}"
                 )
+
+                # ─── (4b) SOS2 인접성 제약 (선택적) ───
+                if enable_sos2:
+                    # 최대 2개의 인접 breakpoint λ만 양수 허용
+                    # Σ_s δ_s = u_it (ON이면 정확히 1개 구간 선택)
+                    prob += (
+                        lpSum(
+                            delta[dg, t, s]
+                            for s in range(self.n_pwl)
+                        ) == u[dg, t],
+                        f"SOS2_seg_sum_{dg}_{t}"
+                    )
+
+                    # λ_0 ≤ δ_0 (첫 breakpoint는 첫 구간에만 속함)
+                    prob += (
+                        lam[dg, t, 0] <= delta[dg, t, 0],
+                        f"SOS2_lam_first_{dg}_{t}"
+                    )
+
+                    # λ_k ≤ δ_{k-1} + δ_k (중간 breakpoint는 인접 2개 구간)
+                    for k in range(1, self.n_pwl):
+                        prob += (
+                            lam[dg, t, k] <= delta[dg, t, k - 1] + delta[dg, t, k],
+                            f"SOS2_lam_mid_{dg}_{t}_{k}"
+                        )
+
+                    # λ_{n_pwl} ≤ δ_{n_pwl-1} (마지막 breakpoint는 마지막 구간에만)
+                    prob += (
+                        lam[dg, t, self.n_pwl] <= delta[dg, t, self.n_pwl - 1],
+                        f"SOS2_lam_last_{dg}_{t}"
+                    )
 
                 # ─── (5) 기동/정지 연결 ───
                 # y_it - z_it = u_it - u_i,t-1
@@ -514,8 +571,6 @@ class MILPSolver:
         schedule = []
         total_fuel = 0.0
         total_start_cost = 0.0
-        total_dump_energy = 0.0
-        total_dump_penalty = 0.0
 
         for t in range(T):
             step = {
@@ -524,11 +579,8 @@ class MILPSolver:
                 "P_req_MW": P_req[t],
                 "P_dc_MW": value(P_dc[t]),
                 "P_c_MW": value(P_c[t]),
-                "P_dump_MW": value(P_dump[t]),
                 "SOC": value(SOC[t]),
             }
-            total_dump_energy += step["P_dump_MW"] * dt[t]
-            total_dump_penalty += self.dump_penalty_per_mwh * step["P_dump_MW"] * dt[t]
 
             for dg in self.dg_names:
                 p_val = value(P_dg[dg, t])
@@ -553,8 +605,6 @@ class MILPSolver:
             "status": status,
             "total_fuel_kg": total_fuel,
             "total_start_cost": total_start_cost,
-            "total_dump_energy_mwh": total_dump_energy,
-            "total_dump_penalty": total_dump_penalty,
             "objective_value": value(prob.objective),
             "solver_backend": solver_backend,
             "schedule": schedule,
@@ -562,8 +612,6 @@ class MILPSolver:
                 schedule,
                 total_fuel,
                 total_start_cost,
-                total_dump_energy,
-                total_dump_penalty,
             ),
         }
 
@@ -598,8 +646,6 @@ class MILPSolver:
         schedule: List[dict],
         total_fuel: float,
         total_start_cost: float,
-        total_dump_energy: float,
-        total_dump_penalty: float,
     ) -> dict:
         """결과 요약 생성."""
         T = len(schedule)
@@ -620,8 +666,6 @@ class MILPSolver:
             "total_voyage_h": total_hours,
             "total_fuel_kg": total_fuel,
             "total_start_cost_usd": total_start_cost,
-            "total_dump_energy_mwh": total_dump_energy,
-            "total_dump_penalty": total_dump_penalty,
             "dg_running_hours": dg_hours,
             "dg_fuel_kg": dg_fuel,
             "dg_start_count": dg_starts,
