@@ -19,7 +19,8 @@ from typing import List, Dict, Optional, Tuple
 
 from pulp import (
     LpProblem, LpMinimize, LpVariable, LpBinary,
-    LpStatus, lpSum, value, PULP_CBC_CMD, CPLEX_CMD, listSolvers
+    LpStatus, lpSum, value, PULP_CBC_CMD, CPLEX_CMD, listSolvers,
+    PulpSolverError,
 )
 
 try:
@@ -29,7 +30,10 @@ except ImportError:
 
 
 class SafeCPLEX_CMD(CPLEX_CMD):
-    """Ignore shared log cleanup races when multiple CPLEX_CMD solvers run."""
+    """유전 알고리즘 멀티 프로세싱으로 항로 평가 시
+    CPLEX_CMD 솔버가 로그 파일에 접근 권한 문제로 실패하는 경우가 있음.
+    이 클래스는 CPLEX_CMD 솔버의 로그 파일 제거 시 PermissionError가 발생해도 무시하도록 오버라이드
+    """
 
     def silent_remove(self, file):
         try:
@@ -61,7 +65,7 @@ def fuel_consumption(P: float, alpha1: float, alpha2: float, alpha3: float) -> f
     Returns
     -------
     float
-        연료 소비율 (kg/h)
+        연료 소비율 (g/KWh)
 
     Notes
     -----
@@ -69,7 +73,8 @@ def fuel_consumption(P: float, alpha1: float, alpha2: float, alpha3: float) -> f
     따라서 SFOC(P)[g/kWh] * P[MW] = kg/h 가 된다.
     """
     sfoc_g_per_kwh = alpha1 * P ** 2 + alpha2 * P + alpha3
-    return sfoc_g_per_kwh * P
+    return sfoc_g_per_kwh * P # kg/h로 연료 소모율
+
 # PWL (Piecewise Linear) 근사
 # =============================================================================
 
@@ -82,8 +87,8 @@ def generate_pwl_breakpoints(
     n_segments: int = 5,
 ) -> List[Tuple[float, float]]:
     """
-    이차 SFOC를 n_segments 구간의 Piecewise Linear로 근사.
-
+    이차 SFOC를 n_segments 구간의 Piecewise Linear로 근사
+    MILP 솔버에서 각 구간의 breakpoint (P, FC) 계산에 사용
     Returns
     -------
     list of (P, FC) tuples
@@ -114,7 +119,7 @@ class MILPSolver:
         self,
         sfoc_json_path: str = "config/sfoc.json",
         n_pwl_segments: int = 5,
-        solver_name: str = "cbc",
+        solver_name: str = "cplex",
     ):
         """
         Parameters
@@ -156,17 +161,12 @@ class MILPSolver:
     def _create_solver(self, time_limit_sec: int, msg: bool):
         """
         Build the requested PuLP backend.
-        Supported: 'cbc', 'cplex', 'cplex_py', 'auto'.
+        Supported: 'cplex', 'cplex_py', 'cbc', 'auto'.
         """
         solver_name = self.solver_name
 
         if solver_name == "auto":
-            if "CPLEX_PY" in self.available_solvers:
-                solver_name = "cplex_py"
-            elif "CPLEX_CMD" in self.available_solvers:
-                solver_name = "cplex"
-            else:
-                solver_name = "cbc"
+            solver_name = "cplex"
 
         if solver_name == "cplex_py":
             if CPLEX_PY is not None and "CPLEX_PY" in self.available_solvers:
@@ -174,7 +174,9 @@ class MILPSolver:
                     CPLEX_PY(msg=msg, timeLimit=time_limit_sec),
                     "CPLEX_PY",
                 )
-            return PULP_CBC_CMD(msg=msg, timeLimit=time_limit_sec), "PULP_CBC_CMD"
+            raise RuntimeError(
+                "solver_name='cplex_py' requested, but PuLP CPLEX_PY is not available."
+            )
 
         if solver_name == "cplex":
             if "CPLEX_CMD" in self.available_solvers:
@@ -191,7 +193,9 @@ class MILPSolver:
                     ),
                     "CPLEX_CMD",
                 )
-            return PULP_CBC_CMD(msg=msg, timeLimit=time_limit_sec), "PULP_CBC_CMD"
+            raise RuntimeError(
+                "solver_name='cplex' requested, but PuLP CPLEX_CMD is not available."
+            )
 
         if solver_name == "cbc":
             return PULP_CBC_CMD(msg=msg, timeLimit=time_limit_sec), "PULP_CBC_CMD"
@@ -200,6 +204,26 @@ class MILPSolver:
             f"Unsupported solver_name: {self.solver_name}. "
             "Use one of: 'cplex', 'cplex_py', 'cbc', 'auto'."
         )
+
+    @staticmethod
+    def _build_infeasible_result(status: str, solver_backend: str) -> Dict:
+        return {
+            "feasible": False,
+            "status": status,
+            "total_fuel_kg": float("inf"),
+            "total_start_cost": float("inf"),
+            "objective_value": float("inf"),
+            "solver_backend": solver_backend,
+            "schedule": [],
+            "summary": {},
+        }
+
+    @staticmethod
+    def _is_expected_cplex_infeasible_error(exc: Exception, solver_backend: str) -> bool:
+        if solver_backend != "CPLEX_CMD":
+            return False
+        message = str(exc).lower()
+        return "infeasible" in message and "cplex" in message
 
     # ─────────────────────────────────────────────────────────────────
     # 메인 풀이 함수
@@ -547,7 +571,12 @@ class MILPSolver:
             time_limit_sec=time_limit_sec,
             msg=msg,
         )
-        prob.solve(solver)
+        try:
+            prob.solve(solver)
+        except PulpSolverError as exc:
+            if self._is_expected_cplex_infeasible_error(exc, solver_backend):
+                return self._build_infeasible_result("Infeasible", solver_backend)
+            raise
 
         # =================================================================
         # 결과 추출
@@ -556,16 +585,7 @@ class MILPSolver:
         feasible = prob.status == 1  # Optimal
 
         if not feasible:
-            return {
-                "feasible": False,
-                "status": status,
-                "total_fuel_kg": float("inf"),
-                "total_start_cost": float("inf"),
-                "objective_value": float("inf"),
-                "solver_backend": solver_backend,
-                "schedule": [],
-                "summary": {},
-            }
+            return self._build_infeasible_result(status, solver_backend)
 
         # 상세 스케줄 추출
         schedule = []
