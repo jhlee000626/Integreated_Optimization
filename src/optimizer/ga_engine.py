@@ -152,8 +152,7 @@ def _power_stw_knots(v_stw_knots: float) -> float:
 
 def _worker_init(
     cost_map_data,
-    sfoc_path: str,
-    n_pwl: int,
+    milp_solver_data,
     env_fn_data,
     n_segments: int,
     rta_h: float,
@@ -163,9 +162,7 @@ def _worker_init(
     global _worker_cost_map, _worker_milp, _worker_env_fn
     global _worker_n_segments, _worker_rta_h, _worker_departure_time_utc, _worker_smoothing_weight
 
-    from src.optimizer.milp_solver import MILPSolver
-
-    _worker_milp = MILPSolver(sfoc_json_path=sfoc_path, n_pwl_segments=n_pwl)
+    _worker_milp = milp_solver_data
     _worker_cost_map = cost_map_data
     _worker_env_fn = env_fn_data
     _worker_n_segments = n_segments
@@ -758,6 +755,7 @@ def _run_simple_ga(
     stats,
     halloffame,
     departure_corridor: Sequence[tuple[float, float]],
+    elite_count: int,
 ):
     logbook = tools.Logbook()
     header = ["gen", "nevals"]
@@ -774,6 +772,10 @@ def _run_simple_ga(
         print(logbook.stream)
 
     for generation in range(1, n_gen + 1):
+        elites = []
+        if elite_count > 0:
+            elites = [toolbox.clone(individual) for individual in tools.selBest(population, min(elite_count, len(population)))]
+
         offspring = toolbox.select(population, len(population))
         offspring = list(map(toolbox.clone, offspring))
         offspring = algorithms.varAnd(offspring, toolbox, cxpb=cx_prob, mutpb=mut_prob)
@@ -782,6 +784,16 @@ def _run_simple_ga(
             _apply_departure_corridor(individual, departure_corridor)
 
         nevals = _evaluate_invalid_individuals(offspring, toolbox)
+
+        if elites:
+            worst_indices = sorted(
+                range(len(offspring)),
+                key=lambda index: offspring[index].fitness.values[0],
+                reverse=True,
+            )[:len(elites)]
+            for index, elite in zip(worst_indices, elites):
+                offspring[index] = elite
+
         if halloffame is not None:
             halloffame.update(offspring)
         population[:] = offspring
@@ -810,6 +822,7 @@ def setup_ga(
     n_workers: int = 1,
     sfoc_path: str = "config/sfoc.json",
     smoothing_weight: float = SMOOTHING_WEIGHT,
+    elite_count: int = 5,
 ):
     if seed is not None:
         random.seed(seed)
@@ -868,8 +881,7 @@ def setup_ga(
             initializer=_worker_init,
             initargs=(
                 cost_map,
-                sfoc_path,
-                5,
+                milp_solver,
                 resolved_env_fn,
                 n_segments,
                 rta_h,
@@ -943,6 +955,7 @@ def setup_ga(
             stats=stats,
             halloffame=hof,
             departure_corridor=departure_corridor,
+            elite_count=elite_count,
         )
     finally:
         if pool is not None:

@@ -19,14 +19,14 @@ from typing import List, Dict, Optional, Tuple
 
 from pulp import (
     LpProblem, LpMinimize, LpVariable, LpBinary,
-    LpStatus, lpSum, value, PULP_CBC_CMD, CPLEX_CMD, listSolvers,
+    LpStatus, lpSum, value, CPLEX_CMD,
     PulpSolverError,
 )
 
-try:
-    from pulp import CPLEX_PY
-except ImportError:
-    CPLEX_PY = None
+
+DEFAULT_CPLEX_CMD_PATH = (
+    r"C:\Program Files\IBM\ILOG\CPLEX_Studio2212\cplex\bin\x64_win64\cplex.exe"
+)
 
 
 class SafeCPLEX_CMD(CPLEX_CMD):
@@ -65,7 +65,7 @@ def fuel_consumption(P: float, alpha1: float, alpha2: float, alpha3: float) -> f
     Returns
     -------
     float
-        연료 소비율 (g/KWh)
+        연료 소비율 (kg/h)
 
     Notes
     -----
@@ -95,9 +95,11 @@ def generate_pwl_breakpoints(
         각 breakpoint에서의 출력(MW) 및 연료 소비율(kg/h)
     """
     breakpoints = []
+
+    # P_min에서 P_max까지 n_segments 구간으로 균등 분할하여 breakpoint 계산
     for k in range(n_segments + 1):
-        P = P_min + (P_max - P_min) * k / n_segments
-        FC = fuel_consumption(P, alpha1, alpha2, alpha3)
+        P = P_min + (P_max - P_min) * k / n_segments # MW
+        FC = fuel_consumption(P, alpha1, alpha2, alpha3) # kg/h
         breakpoints.append((P, FC))
     return breakpoints
 
@@ -119,7 +121,7 @@ class MILPSolver:
         self,
         sfoc_json_path: str = "config/sfoc.json",
         n_pwl_segments: int = 5,
-        solver_name: str = "cplex",
+        solver_name: str = "cplex_cmd",
     ):
         """
         Parameters
@@ -129,14 +131,14 @@ class MILPSolver:
         n_pwl_segments : int
             PWL 근사 세그먼트 수 (기본 5)
         solver_name : str
-            사용할 MILP solver. "cplex", "cbc", "auto" 지원.
+            사용할 MILP solver. "cplex", "cbc" 지원.
         """
         # ── DG / ESS 사양 (kcs_specs.py에서 Import) ──
         from src.ship.kcs_specs import DG_SPECS, DG_MIN_LOAD_RATIO, ESS_SPECS
 
-        self.dg_specs = DG_SPECS
-        self.min_load_ratio = DG_MIN_LOAD_RATIO
-        self.dg_names = list(self.dg_specs.keys())
+        self.dg_specs = DG_SPECS # DG별 P_max, ramp_rate, min_up/down, cost_start
+        self.min_load_ratio = DG_MIN_LOAD_RATIO # DG 최소 부하 비율 
+        self.dg_names = list(self.dg_specs.keys()) # DG Key
 
         self.ess = ESS_SPECS
 
@@ -144,7 +146,6 @@ class MILPSolver:
         self.sfoc_data = load_sfoc(sfoc_json_path)
         self.n_pwl = n_pwl_segments
         self.solver_name = solver_name.lower()
-        self.available_solvers = set(listSolvers(onlyAvailable=True))
 
         # ── PWL Breakpoints 사전 계산 ──
         self.pwl_breakpoints = {}
@@ -158,54 +159,42 @@ class MILPSolver:
                 self.n_pwl,
             )
 
+    # 입력받은 Solver 이름에 따라 pulp 솔버 객체 생성
     def _create_solver(self, time_limit_sec: int, msg: bool):
         """
-        Build the requested PuLP backend.
-        Supported: 'cplex', 'cplex_py', 'cbc', 'auto'.
+        Build the fixed PuLP CPLEX_CMD backend.
         """
         solver_name = self.solver_name
 
-        if solver_name == "auto":
-            solver_name = "cplex"
-
-        if solver_name == "cplex_py":
-            if CPLEX_PY is not None and "CPLEX_PY" in self.available_solvers:
-                return (
-                    CPLEX_PY(msg=msg, timeLimit=time_limit_sec),
-                    "CPLEX_PY",
-                )
-            raise RuntimeError(
-                "solver_name='cplex_py' requested, but PuLP CPLEX_PY is not available."
+        if solver_name not in {"cplex", "cplex_cmd"}:
+            raise ValueError(
+                f"Unsupported solver_name: {self.solver_name}. "
+                "Only 'cplex_cmd' is supported."
             )
 
-        if solver_name == "cplex":
-            if "CPLEX_CMD" in self.available_solvers:
-                log_path = os.path.join(
-                    tempfile.gettempdir(),
-                    f"pulp_cplex_{os.getpid()}_{id(self)}.log",
-                )
-                return (
-                    SafeCPLEX_CMD(
-                        msg=msg,
-                        timeLimit=time_limit_sec,
-                        threads=1,
-                        logPath=log_path,
-                    ),
-                    "CPLEX_CMD",
-                )
+        if not os.path.exists(DEFAULT_CPLEX_CMD_PATH):
             raise RuntimeError(
-                "solver_name='cplex' requested, but PuLP CPLEX_CMD is not available."
+                "CPLEX_CMD executable was not found at the configured path: "
+                f"{DEFAULT_CPLEX_CMD_PATH}"
             )
 
-        if solver_name == "cbc":
-            return PULP_CBC_CMD(msg=msg, timeLimit=time_limit_sec), "PULP_CBC_CMD"
-
-        raise ValueError(
-            f"Unsupported solver_name: {self.solver_name}. "
-            "Use one of: 'cplex', 'cplex_py', 'cbc', 'auto'."
+        log_path = os.path.join(
+            tempfile.gettempdir(),
+            f"pulp_cplex_{os.getpid()}_{id(self)}.log",
+        )
+        return (
+            SafeCPLEX_CMD(
+                path=DEFAULT_CPLEX_CMD_PATH,
+                msg=msg,
+                timeLimit=time_limit_sec,
+                threads=1,
+                logPath=log_path,
+            ),
+            "CPLEX_CMD",
         )
 
-    @staticmethod
+    @staticmethod # 인스턴스 정보 안쓰는 독립 함수로 정의
+    # Infeasible 상태일 때 반환할 결과 딕셔너리 생성 > Feasible결과와 형식 통일
     def _build_infeasible_result(status: str, solver_backend: str) -> Dict:
         return {
             "feasible": False,
@@ -233,7 +222,7 @@ class MILPSolver:
         self,
         P_req: List[float],
         dt: List[float],
-        initial_SOC: float = 0.8,
+        initial_SOC: float = 0.7,
         initial_u: Optional[Dict[str, int]] = None,
         time_limit_sec: int = 120,
         msg: bool = False,
@@ -246,7 +235,7 @@ class MILPSolver:
         ----------
         P_req : list[float]
             각 시간 구간의 요구 부하 (MW). GA가 상수로 전달.
-        dt : list[float]
+        dt : list[float] 
             각 시간 구간의 길이 (h).
         initial_SOC : float
             ESS 초기 SOC (0~1), default 0.8
@@ -275,27 +264,30 @@ class MILPSolver:
                 "summary": dict,
             }
         """
-        T = len(P_req)
+        T = len(P_req) # 요구 부하의 수가 전체 시간창의 시간 스텝 수
         assert len(dt) == T, "P_req와 dt의 길이가 같아야 합니다."
 
+        # dict 형태로 전달된 초기 ON/OFF 상태가 없으면 모두 OFF로 간주
         if initial_u is None:
             initial_u = {dg: 0 for dg in self.dg_names}
 
         # =================================================================
         # 문제 정의
+        # LPProblem 객체 생성, 최소화하는 문제로 설정
         # =================================================================
         prob = LpProblem("DG_ESS_Unit_Commitment", LpMinimize)
 
         # =================================================================
         # 결정 변수 생성
         # =================================================================
-
+        
         # DG 출력 (MW) — 연속
+        # 결정 변수의 발전기, 시간 인덱스에서의 출력 전력을 딕셔너리로 정의
         P_dg = {
             (dg, t): LpVariable(f"P_{dg}_{t}", lowBound=0)
             for dg in self.dg_names for t in range(T)
         }
-
+        
         # DG ON/OFF — 이진
         u = {
             (dg, t): LpVariable(f"u_{dg}_{t}", cat=LpBinary)
@@ -342,6 +334,7 @@ class MILPSolver:
             for t in range(T)
         }
 
+
         # PWL 보조 변수: λ (convex combination weights)
         # λ[dg, t, k] — breakpoint k의 가중치
         lam = {
@@ -368,7 +361,7 @@ class MILPSolver:
         # 목적 함수: min Σ_t [ Σ_i FC_PWL_i(t)·Δt + C_start·y_it ]
         # =================================================================
 
-        # PWL 연료 비용 변수
+        # PWL 연료 비용 변수 kg/h 단위로 각 DG의 연료 소비율을 나타내는 보조 변수
         FC_pwl = {
             (dg, t): LpVariable(f"FC_{dg}_{t}", lowBound=0)
             for dg in self.dg_names for t in range(T)
@@ -406,6 +399,7 @@ class MILPSolver:
                 P_c[t] <= self.ess["P_c_max"] * u_ess[t],
                 f"ESS_Charge_Mode_{t}"
             )
+
             prob += (
                 P_dc[t] <= self.ess["P_dc_max"] * (1 - u_ess[t]),
                 f"ESS_Discharge_Mode_{t}"
@@ -413,7 +407,7 @@ class MILPSolver:
 
             # ─── (2) ESS SOC 업데이트 ───
             inv_eta_dc = 1.0 / self.ess["eta_dc"]
-            coeff = dt[t] / self.ess["capacity"]
+            coeff = dt[t] / self.ess["capacity"] # SOC 변화량 계산을 위한 계수 (시간 구간 길이 / ESS 용량)
 
             if t == 0:
                 prob += (
@@ -448,6 +442,11 @@ class MILPSolver:
                 )
 
                 # ─── (4) PWL 제약 (Convex Combination) ───
+                # P_MIN부터 P_MAX까지 n_segments 구간의 breakpoint로 SFOC와 추진 부하를 곱함
+                # 각 breakpoint에서의 (P, FC) 값이 pwl_breakpoints에 저장되어 있음
+                # P = Σ_k λ_k · p_k
+                # Σ_k λ_k = u_it (ON이면 1, OFF면 0)
+                # 연립방정식으로도 풀 수 있음 
                 bp = self.pwl_breakpoints[dg]
 
                 # P_DG = Σ_k λ_k · p_k
@@ -547,6 +546,7 @@ class MILPSolver:
 
             for t in range(T):
                 # 최소 기동 시간: 기동 후 min_up_h 동안 ON 유지
+                # find_covering_steps 함수로 t부터 시작해서 min_up_h를 커버하는 시간 스텝 리스트 반환
                 up_steps = self._find_covering_steps(t, dt, min_up_h)
                 if up_steps:
                     prob += (

@@ -28,11 +28,14 @@ def ensure_output_dir(case_name: str) -> str:
 def load_marine_environment() -> Tuple[MarineEnvironmentLoader, Callable, datetime]:
     era5_path, cmems_path = resolve_marine_dataset_paths(PROJECT_ROOT)
     loader = MarineEnvironmentLoader(era5_path, cmems_path)
-    departure_time_utc = loader.available_times_utc[0]
+    from datetime import datetime, timezone
+
+    departure_time_utc = datetime(2025, 3, 25, 6, 0, tzinfo=timezone.utc)
+
     return loader, loader.get_environment_fn(), departure_time_utc
 
 
-def make_milp_solver(solver_name: str = "auto") -> MILPSolver:
+def make_milp_solver(solver_name: str = "cplex_cmd") -> MILPSolver:
     return MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5, solver_name=solver_name)
 
 
@@ -43,7 +46,7 @@ def solve_route_schedule(
     initial_soc: float = 0.7,
     enable_sos2: bool = False,
 ):
-    milp = make_milp_solver(solver_name="cbc")
+    milp = make_milp_solver(solver_name="cplex_cmd")
     power_profile = build_required_power_profile(
         route,
         env_fn=env_fn,

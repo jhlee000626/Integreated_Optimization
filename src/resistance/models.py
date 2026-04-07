@@ -28,8 +28,17 @@ class ShipResistanceSpecs:
     DesignSpeed: float
     eta_drive: float = 0.98
     ContainerHeight: float = 2.6
-    ContainerTiersOnDeck: int = 9
+    ContainerTiersOnDeck: int = 3
     SternShapeCoefficient: float = 10.0
+
+    @property
+    def eta_shaft(self) -> float:
+        """Backward-compatible alias for shaft efficiency."""
+        return self.eta_drive
+
+    @eta_shaft.setter
+    def eta_shaft(self, value: float) -> None:
+        self.eta_drive = float(value)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, float]) -> "ShipResistanceSpecs":
@@ -52,9 +61,9 @@ class ShipResistanceSpecs:
             NumberOfBlades=int(data.get("NumberOfBlades", 5)),
             N_MCR=float(data.get("N_MCR", 104.0)),
             DesignSpeed=float(data.get("DesignSpeed", 24.0)),
-            eta_drive=float(data.get("eta_drive", 0.98)),
+            eta_drive=float(data.get("eta_shaft", data.get("eta_drive", 0.98))),
             ContainerHeight=float(data.get("ContainerHeight", 2.6)),
-            ContainerTiersOnDeck=int(data.get("ContainerTiersOnDeck", 9)),
+            ContainerTiersOnDeck=int(data.get("ContainerTiersOnDeck", 4)),
             SternShapeCoefficient=float(data.get("SternShapeCoefficient", 10.0)),
         )
 

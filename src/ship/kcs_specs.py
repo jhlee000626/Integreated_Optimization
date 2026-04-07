@@ -32,12 +32,12 @@ KCS_PROPULSION = {
     "PropellerDiameter": 7.9,
     "AEAO": 0.65,
     "NumberOfBlades": 5,
-    "N_MCR": 104.0,
+    "N_MCR": 90.0,
     "DesignSpeed": 24.0,
-    "eta_drive": 0.98,
+    "eta_shaft": 0.98,
     "ContainerHeight": 2.6,
     "ContainerTiersOnDeck": 9,
-    "SternShapeCoefficient": 10.0,
+    "SternShapeCoefficient": 10.0, # U-shaped stern
 }
 
 KCS_ISO15016 = {
@@ -54,7 +54,7 @@ DG_SPECS = {
     "DG1": {
         "P_max": 14.4,
         "ramp_rate": 0.5,
-        "min_up": 0.5,
+        "min_up": 1.0,
         "min_down": 0.5,
         "cost_start": 170,
     },
@@ -62,18 +62,19 @@ DG_SPECS = {
         "P_max": 14.4,
         "ramp_rate": 0.5,
         "min_up": 1.0,
-        "min_down": 1.0,
+        "min_down": 0.5,
         "cost_start": 170,
     },
     "DG3": {
         "P_max": 10.8,
         "ramp_rate": 0.5,
-        "min_up": 0.5,
+        "min_up": 1.0,
         "min_down": 0.5,
         "cost_start": 120,
     },
 }
 
+# 나중에 MAN 기술서에서 확인
 DG_MIN_LOAD_RATIO = 0.25
 
 ESS_SPECS = {

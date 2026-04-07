@@ -15,7 +15,7 @@ from src.ship.kcs_specs import KCS_ISO15016
 
 _RESISTANCE_ESTIMATOR = ResistanceEstimator()
 _PROPULSION_HELPER = PropulsionHelper()
-MAX_PROPULSION_LOAD_KW = 28000.0
+MAX_PROPULSION_LOAD_KW = 31920.0
 
 
 def wind_speed_to_beaufort(v_wind_ms: float) -> int:
@@ -67,7 +67,7 @@ class ModifiedDPMCalculator:
         ship = ship_data if isinstance(ship_data, ShipResistanceSpecs) else ShipResistanceSpecs.from_mapping(ship_data)
 
         heading_deg = float(kwargs.get("heading_deg", 0.0))
-        eta_drive = float(kwargs.get("eta_drive", ship.eta_drive))
+        eta_shaft = float(kwargs.get("eta_shaft", ship.eta_shaft))
         env = kwargs.get("env")
         if env is not None and not isinstance(env, EnvironmentData):
             raise TypeError("env must be an EnvironmentData instance when provided.")
@@ -137,9 +137,9 @@ class ModifiedDPMCalculator:
         )
 
         pd_kw_raw = propulsion.power_kw
-        bhp_kw_raw = pd_kw_raw / eta_drive if eta_drive > 1e-9 else pd_kw_raw
+        bhp_kw_raw = pd_kw_raw / eta_shaft if eta_shaft > 1e-9 else pd_kw_raw
         bhp_kw = min(bhp_kw_raw, MAX_PROPULSION_LOAD_KW)
-        pd_kw = bhp_kw * eta_drive if eta_drive > 1e-9 else bhp_kw
+        pd_kw = bhp_kw * eta_shaft if eta_shaft > 1e-9 else bhp_kw
         p_prop = bhp_kw / 1000.0
         p_req = p_prop + p_service
 

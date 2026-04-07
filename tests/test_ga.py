@@ -81,7 +81,7 @@ def main():
     print("\n" + "=" * 60)
     print(" [Phase 3] MILP setup")
     print("=" * 60)
-    milp = MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5, solver_name="auto")
+    milp = MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5, solver_name="cplex")
     print("  MILP ready")
 
     print("\n" + "=" * 60)
@@ -148,7 +148,7 @@ def main():
         departure_time_utc=departure_time_utc,
     )
     p_req_best = [segment["P_req"] for segment in power_profile]
-    milp_check = MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5, solver_name="cbc")
+    milp_check = MILPSolver(sfoc_json_path=SFOC_PATH, n_pwl_segments=5, solver_name="cplex")
     milp_detail = milp_check.solve(P_req=p_req_best, dt=route["dt"], initial_SOC=0.7, msg=False, enable_sos2=False)
     if milp_detail["feasible"]:
         print(f"  MILP pure fuel: {milp_detail['total_fuel_kg']:.1f} kg")

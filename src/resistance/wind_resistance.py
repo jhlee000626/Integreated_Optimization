@@ -1,5 +1,5 @@
 """
-ISO 15016 / Kristensen-style wind resistance approximation.
+ISO 15016 / Kristensen-style wind resistance approximation. (Completed)
 """
 
 from __future__ import annotations

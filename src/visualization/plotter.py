@@ -12,11 +12,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.collections import LineCollection
+from matplotlib.colors import ListedColormap
 from shapely.geometry import MultiPolygon
 
 
 def _build_visual_route(route: dict) -> dict:
-    """Pad the route for display so speed starts/ends at zero."""
+    """Return the original route geometry without synthetic display padding."""
     waypoints = list(route["waypoints"])
     speeds = list(route["speeds"])
     headings = list(route["headings"])
@@ -24,15 +25,131 @@ def _build_visual_route(route: dict) -> dict:
     if not waypoints or not speeds or not headings:
         return {"waypoints": waypoints, "speeds": speeds, "headings": headings}
 
-    visual_waypoints = [waypoints[0], *waypoints, waypoints[-1]]
-    visual_speeds = [0.0, *speeds, 0.0]
-    visual_headings = [headings[0], *headings, headings[-1]]
-
     return {
-        "waypoints": visual_waypoints,
-        "speeds": visual_speeds,
-        "headings": visual_headings,
+        "waypoints": waypoints,
+        "speeds": speeds,
+        "headings": headings,
     }
+
+
+def plot_cost_map_route(
+    route: dict,
+    cost_map,
+    save_dir: str = "output",
+    filename: str = "cost_map_route.png",
+):
+    """Save a simple route view over the cost map without speed coloring."""
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, filename)
+    cost_map.plot(save_path=save_path, route_wps=route.get("waypoints"))
+
+
+def plot_route_comparison_map(
+    routes_by_case: dict[str, dict],
+    cost_map,
+    save_dir: str = "output",
+    filename: str = "comparison_routes.png",
+):
+    """Save a single map with multiple case routes overlaid for comparison."""
+    os.makedirs(save_dir, exist_ok=True)
+
+    from src.grid.no_go_zone import BUSAN_JEJU_BOUNDS, BUSAN_PORT, JEJU_PORT
+
+    fig, ax = plt.subplots(figsize=(11, 8.5))
+    ax.set_aspect("equal")
+
+    bounds = BUSAN_JEJU_BOUNDS
+    ax.set_xlim(bounds["lon_min"]+1, bounds["lon_max"]-1)
+    ax.set_ylim(bounds["lat_min"]+1, bounds["lat_max"]-0.5)
+
+    extent = [
+        bounds["lon_min"], bounds["lon_max"],
+        bounds["lat_min"], bounds["lat_max"],
+    ]
+    ax.imshow(
+        cost_map.cost_grid,
+        extent=extent,
+        origin="lower",
+        cmap=ListedColormap(["white", "#bdbdbd"]),
+        vmin=0,
+        vmax=100,
+        aspect="equal",
+        alpha=0.55,
+        interpolation="bilinear",
+    )
+
+    X, Y = np.meshgrid(cost_map.lons, cost_map.lats)
+    ax.contour(
+        X,
+        Y,
+        cost_map.cost_grid,
+        levels=[50],
+        colors="black",
+        linewidths=0.5,
+        alpha=0.35,
+    )
+
+    palette = ["#E53935", "#1E88E5", "#43A047", "#FB8C00", "#6D4C41", "#8E24AA"]
+    for index, (case_name, route) in enumerate(routes_by_case.items()):
+        if not route or not route.get("waypoints"):
+            continue
+
+        color = palette[index % len(palette)]
+        waypoints = route["waypoints"]
+        lats = [wp[0] for wp in waypoints]
+        lons = [wp[1] for wp in waypoints]
+        ax.plot(
+            lons,
+            lats,
+            "-",
+            color=color,
+            linewidth=2.4,
+            solid_capstyle="round",
+            label=case_name,
+        )
+        ax.plot(
+            lons,
+            lats,
+            "o",
+            color="white",
+            markersize=2.8,
+            markeredgecolor=color,
+            markeredgewidth=0.8,
+        )
+
+    ax.plot(
+        BUSAN_PORT[1],
+        BUSAN_PORT[0],
+        "*",
+        color="#4CAF50",
+        markersize=14,
+        markeredgecolor="Black",
+        markeredgewidth=1.2,
+        label="Busan",
+        zorder=10,
+    )
+    ax.plot(
+        JEJU_PORT[1],
+        JEJU_PORT[0],
+        "*",
+        color="#F44336",
+        markersize=14,
+        markeredgecolor="Black",
+        markeredgewidth=1.2,
+        label="Jeju",
+        zorder=10,
+    )
+
+    ax.set_xlabel("Longitude", fontsize=10)
+    ax.set_ylabel("Latitude", fontsize=10)
+    ax.set_title("Case Route Comparison", fontsize=12, fontweight="bold")
+    ax.grid(True, linewidth=0.3, alpha=0.5)
+    ax.legend(fontsize=8.5, loc="upper right")
+
+    path = os.path.join(save_dir, filename)
+    fig.savefig(path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[SAVED] {path}")
 
 
 def plot_optimal_route(
@@ -44,6 +161,7 @@ def plot_optimal_route(
     최적 경로를 Cost Map 위에 시각화.
     """
     os.makedirs(save_dir, exist_ok=True)
+    plot_cost_map_route(route, cost_map, save_dir=save_dir, filename="route.png")
     fig, ax = plt.subplots(figsize=(14, 12))
     ax.set_aspect("equal")
 

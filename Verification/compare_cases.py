@@ -20,6 +20,7 @@ import sys
 from dataclasses import asdict, dataclass
 
 import numpy as np
+import pandas as pd
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -43,6 +44,7 @@ from src.optimizer.ga_engine import (
     RTA_HOURS,
     setup_ga,
 )
+from src.visualization.plotter import plot_route_comparison_map
 
 
 @dataclass
@@ -64,14 +66,22 @@ class CaseMetrics:
     note: str = ""
 
 
+@dataclass
+class CaseRunResult:
+    metrics: CaseMetrics
+    route: dict
+    power_profile: list[dict]
+    milp_result: dict | None
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n-segments", type=int, default=N_SEGMENTS, help="Common segment count.")
     parser.add_argument("--rta-h", type=float, default=RTA_HOURS, help="Common voyage RTA in hours.")
-    parser.add_argument("--ga-pop-size", type=int, default=100, help="GA population size for cases 2 and 3.")
-    parser.add_argument("--ga-n-gen", type=int, default=100, help="GA generation count for cases 2 and 3.")
+    parser.add_argument("--ga-pop-size", type=int, default=200, help="GA population size for cases 2 and 3.")
+    parser.add_argument("--ga-n-gen", type=int, default=200, help="GA generation count for cases 2 and 3.")
     parser.add_argument("--ga-workers", type=int, default=0, help="GA worker count.")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed for GA cases. Use None for random initialization.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for GA cases. Use None for random initialization.")
     parser.add_argument(
         "--ga-cost-resolution",
         type=float,
@@ -121,7 +131,7 @@ def _summarize_case(
     )
 
 
-def _run_case1(env_fn, departure_time_utc, n_segments: int, rta_h: float, astar_cost_resolution: float) -> CaseMetrics:
+def _run_case1(env_fn, departure_time_utc, n_segments: int, rta_h: float, astar_cost_resolution: float) -> CaseRunResult:
     cost_map = build_cost_map(resolution=astar_cost_resolution)
     _, waypoints, total_dist_nm = build_astar_route_points(cost_map, BUSAN_PORT, JEJU_PORT, n_segments)
     dt_h = rta_h / n_segments
@@ -130,15 +140,20 @@ def _run_case1(env_fn, departure_time_utc, n_segments: int, rta_h: float, astar_
     route = build_fixed_route(waypoints, base_speed, n_segments=n_segments, rta_h=rta_h)
     validation = validate_route(route, cost_map, env_fn, departure_time_utc)
     _, power_profile, milp_result = solve_route_schedule(route, env_fn, departure_time_utc, initial_soc=0.7)
-    return _summarize_case(
-        "case1_astar_fixed",
-        route,
-        power_profile,
-        objective=milp_result["total_fuel_kg"] if milp_result["feasible"] else None,
-        objective_kind="milp_fuel_kg",
+    return CaseRunResult(
+        metrics=_summarize_case(
+            "case1_astar_fixed",
+            route,
+            power_profile,
+            objective=milp_result["total_fuel_kg"] if milp_result["feasible"] else None,
+            objective_kind="milp_fuel_kg",
+            milp_result=milp_result,
+            route_violation=validation.land_violation,
+            note=f"astar_res={astar_cost_resolution}",
+        ),
+        route=route,
+        power_profile=power_profile,
         milp_result=milp_result,
-        route_violation=validation.land_violation,
-        note=f"astar_res={astar_cost_resolution}",
     )
 
 
@@ -152,7 +167,7 @@ def _run_case2(
     ga_workers: int,
     ga_cost_resolution: float,
     seed: int,
-) -> CaseMetrics:
+) -> CaseRunResult:
     cost_map = build_cost_map(resolution=ga_cost_resolution)
     ga_result = setup_ga(
         cost_map=cost_map,
@@ -168,15 +183,20 @@ def _run_case2(
     )
     route = ga_result["best_route"]
     _, power_profile, milp_result = solve_route_schedule(route, env_fn, departure_time_utc, initial_soc=0.7)
-    return _summarize_case(
-        "case2_ga_twostage",
-        route,
-        power_profile,
-        objective=ga_result["best_fitness"],
-        objective_kind="energy_objective",
+    return CaseRunResult(
+        metrics=_summarize_case(
+            "case2_ga_twostage",
+            route,
+            power_profile,
+            objective=ga_result["best_fitness"],
+            objective_kind="energy_objective",
+            milp_result=milp_result,
+            route_violation=route["land_violation"],
+            note=f"ga_res={ga_cost_resolution}",
+        ),
+        route=route,
+        power_profile=power_profile,
         milp_result=milp_result,
-        route_violation=route["land_violation"],
-        note=f"ga_res={ga_cost_resolution}",
     )
 
 
@@ -190,7 +210,7 @@ def _run_case3(
     ga_workers: int,
     ga_cost_resolution: float,
     seed: int,
-) -> CaseMetrics:
+) -> CaseRunResult:
     cost_map = build_cost_map(resolution=ga_cost_resolution)
     milp = make_milp_solver()
     ga_result = setup_ga(
@@ -208,15 +228,20 @@ def _run_case3(
     )
     route = ga_result["best_route"]
     _, power_profile, milp_result = solve_route_schedule(route, env_fn, departure_time_utc, initial_soc=0.7)
-    return _summarize_case(
-        "case3_ga_integrated",
-        route,
-        power_profile,
-        objective=ga_result["best_fitness"],
-        objective_kind="ga_objective",
+    return CaseRunResult(
+        metrics=_summarize_case(
+            "case3_ga_integrated",
+            route,
+            power_profile,
+            objective=ga_result["best_fitness"],
+            objective_kind="ga_objective",
+            milp_result=milp_result,
+            route_violation=route["land_violation"],
+            note=f"ga_res={ga_cost_resolution}",
+        ),
+        route=route,
+        power_profile=power_profile,
         milp_result=milp_result,
-        route_violation=route["land_violation"],
-        note=f"ga_res={ga_cost_resolution}",
     )
 
 
@@ -242,6 +267,161 @@ def _print_summary(rows: list[CaseMetrics]) -> None:
         if row.note:
             print(f"  note: {row.note}")
         print(f"  objective_kind: {row.objective_kind} | milp_feasible: {row.milp_feasible}")
+
+
+def _serialize_datetime(value) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()
+
+
+def _segment_rows(case_run: CaseRunResult) -> list[dict]:
+    route = case_run.route
+    power_profile = case_run.power_profile
+    milp_result = case_run.milp_result or {}
+    schedule_by_t = {int(step["t"]): step for step in milp_result.get("schedule", [])}
+    rows: list[dict] = []
+
+    for segment in power_profile:
+        step_index = int(segment["segment"])
+        schedule_step = schedule_by_t.get(step_index, {})
+        row = {
+            "case_name": case_run.metrics.case_name,
+            "segment": step_index,
+            "phase": segment["phase"],
+            "when_utc": _serialize_datetime(segment["when_utc"]),
+            "dt_h": float(route["dt"][step_index]),
+            "distance_nm": float(route["distances_nm"][step_index]),
+            "node_from_lat": float(segment["waypoint_from"][0]),
+            "node_from_lon": float(segment["waypoint_from"][1]),
+            "node_to_lat": float(segment["waypoint_to"][0]),
+            "node_to_lon": float(segment["waypoint_to"][1]),
+            "heading_deg": float(segment["heading_deg"]),
+            "encounter_angle_deg": float(segment["encounter_angle_deg"]),
+            "speed_sog_kts": float(segment["speed_sog_kts"]),
+            "speed_stw_kts": float(segment["speed_stw_kts"]),
+            "speed_stw_power_kts": float(segment["speed_stw_power_kts"]),
+            "current_component_kts": float(segment["current_component_kts"]),
+            "wind_speed_ms": float(segment["wind_speed_ms"]),
+            "wind_dir_deg": float(segment["wind_dir_deg"]) if segment["wind_dir_deg"] is not None else None,
+            "current_speed_ms": float(segment["current_speed_ms"]),
+            "current_dir_deg": float(segment["current_dir_deg"]),
+            "wave_height_m": float(segment["wave_height_m"]),
+            "wave_period_s": float(segment["wave_period_s"]),
+            "wave_dir_deg": float(segment["wave_dir_deg"]),
+            "P_prop_MW": float(segment["P_prop"]),
+            "P_service_MW": float(segment["P_service"]),
+            "P_req_MW": float(segment["P_req"]),
+            "PD_kW": float(segment["PD_kW"]),
+            "BHP_kW": float(segment["BHP_kW"]),
+            "total_resistance_N": float(segment["total_resistance_N"]),
+            "R_calm_N": float(segment["R_calm_N"]),
+            "R_wind_N": float(segment["R_wind_N"]),
+            "R_wave_N": float(segment["R_wave_N"]),
+            "relative_wind_speed_ms": float(segment["relative_wind_speed_ms"]),
+            "relative_wind_dir_deg": float(segment["relative_wind_dir_deg"]),
+        }
+
+        if schedule_step:
+            row["fuel_step_kg"] = float(
+                sum(
+                    float(value) * float(schedule_step["dt_h"])
+                    for key, value in schedule_step.items()
+                    if key.endswith("_FC_kgh")
+                )
+            )
+            for key, value in schedule_step.items():
+                if key in {"t", "dt_h", "P_req_MW"}:
+                    continue
+                row[f"milp_{key}"] = value
+        else:
+            row["fuel_step_kg"] = None
+
+        rows.append(row)
+
+    return rows
+
+
+def _node_rows(case_run: CaseRunResult) -> list[dict]:
+    route = case_run.route
+    power_by_segment = {int(segment["segment"]): segment for segment in case_run.power_profile}
+    schedule_by_t = {int(step["t"]): step for step in (case_run.milp_result or {}).get("schedule", [])}
+    rows: list[dict] = []
+
+    for node_index, node in enumerate(route.get("nodes", [])):
+        row = {
+            "case_name": case_run.metrics.case_name,
+            "node_index": node_index,
+            "time_h": float(node["time_h"]),
+            "time_utc": _serialize_datetime(node.get("time_utc")),
+            "lat": float(node["lat"]),
+            "lon": float(node["lon"]),
+            "speed_out_kts": float(node["speed_out_kts"]) if node.get("speed_out_kts") is not None else None,
+            "speed_over_ground_kts": (
+                float(node["speed_over_ground_kts"])
+                if node.get("speed_over_ground_kts") is not None
+                else None
+            ),
+            "speed_through_water_kts": (
+                float(node["speed_through_water_kts"])
+                if node.get("speed_through_water_kts") is not None
+                else None
+            ),
+            "heading_out_deg": float(node["heading_out_deg"]) if node.get("heading_out_deg") is not None else None,
+        }
+
+        segment = power_by_segment.get(node_index)
+        schedule_step = schedule_by_t.get(node_index, {})
+        if segment is not None:
+            row.update(
+                {
+                    "outgoing_phase": segment["phase"],
+                    "outgoing_speed_sog_kts": float(segment["speed_sog_kts"]),
+                    "outgoing_speed_stw_kts": float(segment["speed_stw_kts"]),
+                    "wind_speed_ms": float(segment["wind_speed_ms"]),
+                    "wind_dir_deg": float(segment["wind_dir_deg"]) if segment["wind_dir_deg"] is not None else None,
+                    "current_speed_ms": float(segment["current_speed_ms"]),
+                    "current_dir_deg": float(segment["current_dir_deg"]),
+                    "wave_height_m": float(segment["wave_height_m"]),
+                    "wave_period_s": float(segment["wave_period_s"]),
+                    "wave_dir_deg": float(segment["wave_dir_deg"]),
+                    "P_prop_MW": float(segment["P_prop"]),
+                    "P_service_MW": float(segment["P_service"]),
+                    "P_req_MW": float(segment["P_req"]),
+                }
+            )
+
+        if schedule_step:
+            row["fuel_step_kg"] = float(
+                sum(
+                    float(value) * float(schedule_step["dt_h"])
+                    for key, value in schedule_step.items()
+                    if key.endswith("_FC_kgh")
+                )
+            )
+            row["SOC"] = schedule_step.get("SOC")
+
+        rows.append(row)
+
+    return rows
+
+
+def _save_detail_workbook(case_runs: list[CaseRunResult], output_dir: str) -> str:
+    summary_df = pd.DataFrame([asdict(case_run.metrics) for case_run in case_runs])
+    segments_df = pd.DataFrame(
+        [row for case_run in case_runs for row in _segment_rows(case_run)]
+    )
+    nodes_df = pd.DataFrame(
+        [row for case_run in case_runs for row in _node_rows(case_run)]
+    )
+
+    workbook_path = os.path.join(output_dir, "case_comparison_details.xlsx")
+    with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, sheet_name="summary", index=False)
+        segments_df.to_excel(writer, sheet_name="segments", index=False)
+        nodes_df.to_excel(writer, sheet_name="nodes", index=False)
+
+    return workbook_path
 
 
 def _save_summary(rows: list[CaseMetrics], output_dir: str) -> tuple[str, str]:
@@ -274,7 +454,7 @@ def main() -> None:
 
     env_loader, env_fn, departure_time_utc = load_marine_environment()
     try:
-        rows = [
+        case_runs = [
             _run_case1(
                 env_fn=env_fn,
                 departure_time_utc=departure_time_utc,
@@ -308,11 +488,24 @@ def main() -> None:
     finally:
         del env_loader
 
+    rows = [case_run.metrics for case_run in case_runs]
     _print_summary(rows)
     json_path, csv_path = _save_summary(rows, out_dir)
+    workbook_path = _save_detail_workbook(case_runs, out_dir)
+
+    comparison_cost_map = build_cost_map(
+        resolution=min(args.astar_cost_resolution, args.ga_cost_resolution)
+    )
+    plot_route_comparison_map(
+        {case_run.metrics.case_name: case_run.route for case_run in case_runs},
+        comparison_cost_map,
+        save_dir=out_dir,
+    )
+
     print(f"\nSaved summary:")
     print(f"  JSON: {json_path}")
     print(f"  CSV : {csv_path}")
+    print(f"  XLSX: {workbook_path}")
 
 
 if __name__ == "__main__":

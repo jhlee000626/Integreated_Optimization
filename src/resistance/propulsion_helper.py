@@ -32,6 +32,8 @@ class PropulsionHelper:
         positive = [sol for sol in (sol1, sol2) if sol >= 0.0]
         if not positive:
             return fallback
+        
+        # 양수 해, 음수 해중에 기존 전진비에 가까운 해 선택
         return min(positive, key=lambda value: abs(value - fallback))
 
     @staticmethod
@@ -60,8 +62,8 @@ class PropulsionHelper:
         total_resistance_n = res_data.total_resistance_n
         w = res_data.wake_fraction
         t = res_data.thrust_deduction
-        eta_r = res_data.relative_rotation_efficiency
-        eta_h = (1.0 - t) / (1.0 - w) if abs(1.0 - w) > 1e-6 else 1.0
+        eta_r = res_data.relative_rotation_efficiency # 상대 회전 효율 > Holtrop
+        eta_h = (1.0 - t) / (1.0 - w) if abs(1.0 - w) > 1e-6 else 1.0 # 선각 효율
 
         v_id = v_c
         tolerance = 1e-4
