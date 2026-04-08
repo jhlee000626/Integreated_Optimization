@@ -649,7 +649,8 @@ def compute_milp_infeasible_surrogate(
     ess = milp_solver.ess
 
     total_dg_power_cap = sum(float(spec["P_max"]) for spec in dg_specs.values())
-    total_supply_cap = total_dg_power_cap + float(ess["P_dc_max"])
+    ess_power_cap = float(ess["capacity"]) * float(ess["c_rate"])
+    total_supply_cap = total_dg_power_cap + ess_power_cap
     power_excess_mwh = sum(
         max(0.0, float(power) - total_supply_cap) * float(duration)
         for power, duration in zip(p_req_list, dt)
@@ -664,22 +665,10 @@ def compute_milp_infeasible_surrogate(
     )
     energy_deficit_mwh = max(0.0, total_required_energy - total_dg_energy_cap - ess_deliverable_energy)
 
-    ramp_excess_mw = 0.0
-    ess_net_ramp_cap = float(ess["P_dc_max"]) + float(ess["P_c_max"])
-    for step_index in range(1, len(p_req_list)):
-        dg_ramp_cap = sum(
-            float(spec["ramp_rate"]) * float(spec["P_max"]) * float(dt[step_index])
-            for spec in dg_specs.values()
-        )
-        total_ramp_cap = dg_ramp_cap + ess_net_ramp_cap
-        load_delta = abs(float(p_req_list[step_index]) - float(p_req_list[step_index - 1]))
-        ramp_excess_mw += max(0.0, load_delta - total_ramp_cap)
-
     return (
         MILP_INFEASIBLE_BASE
         + MILP_POWER_EXCESS_WEIGHT * power_excess_mwh
         + MILP_ENERGY_DEFICIT_WEIGHT * energy_deficit_mwh
-        + MILP_RAMP_EXCESS_WEIGHT * ramp_excess_mw
     )
 
 

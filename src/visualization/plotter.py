@@ -313,7 +313,7 @@ def plot_power_schedule(
     ax.bar(t_arr, [-value for value in P_c], color='#29B6F6', alpha=0.75, label='ESS charge')
     ax.plot(t_arr, P_req, 'ko-', markersize=4, linewidth=1.5, label='P_req')
     ax.set_ylabel("Power (MW)", fontsize=11)
-    ax.set_title("DG + ESS Output vs Required Load", fontsize=12, fontweight='bold')
+    ax.set_title("DG + ESS Output Scheduling Profile", fontsize=12, fontweight='bold')
     ax.grid(True, alpha=0.3)
 
     speed_ax = ax.twinx()

@@ -44,7 +44,10 @@ from src.optimizer.ga_engine import (
     RTA_HOURS,
     setup_ga,
 )
-from src.visualization.plotter import plot_route_comparison_map
+from src.visualization.plotter import (
+    plot_power_schedule,
+    plot_route_comparison_map,
+)
 
 
 @dataclass
@@ -330,6 +333,13 @@ def _segment_rows(case_run: CaseRunResult) -> list[dict]:
                     if key.endswith("_FC_kgh")
                 )
             )
+            row["milp_total_dg_MW"] = float(
+                sum(
+                    float(value)
+                    for key, value in schedule_step.items()
+                    if key.endswith("_P_MW") and key.startswith("DG")
+                )
+            )
             for key, value in schedule_step.items():
                 if key in {"t", "dt_h", "P_req_MW"}:
                     continue
@@ -399,7 +409,17 @@ def _node_rows(case_run: CaseRunResult) -> list[dict]:
                     if key.endswith("_FC_kgh")
                 )
             )
-            row["SOC"] = schedule_step.get("SOC")
+            row["milp_total_dg_MW"] = float(
+                sum(
+                    float(value)
+                    for key, value in schedule_step.items()
+                    if key.endswith("_P_MW") and key.startswith("DG")
+                )
+            )
+            for key, value in schedule_step.items():
+                if key in {"t", "dt_h", "P_req_MW"}:
+                    continue
+                row[f"milp_{key}"] = value
 
         rows.append(row)
 
@@ -438,6 +458,26 @@ def _save_summary(rows: list[CaseMetrics], output_dir: str) -> tuple[str, str]:
             writer.writerow(asdict(row))
 
     return json_path, csv_path
+
+
+def _save_case_power_schedules(case_runs: list[CaseRunResult], output_dir: str) -> list[str]:
+    saved_dirs: list[str] = []
+
+    for case_run in case_runs:
+        if not case_run.milp_result:
+            continue
+
+        case_dir = os.path.join(output_dir, case_run.metrics.case_name)
+        plot_power_schedule(
+            case_run.milp_result,
+            power_profile=case_run.power_profile,
+            save_dir=case_dir,
+        )
+
+        if os.path.exists(os.path.join(case_dir, "power_schedule.png")):
+            saved_dirs.append(case_dir)
+
+    return saved_dirs
 
 
 def main() -> None:
@@ -492,6 +532,7 @@ def main() -> None:
     _print_summary(rows)
     json_path, csv_path = _save_summary(rows, out_dir)
     workbook_path = _save_detail_workbook(case_runs, out_dir)
+    power_schedule_dirs = _save_case_power_schedules(case_runs, out_dir)
 
     comparison_cost_map = build_cost_map(
         resolution=min(args.astar_cost_resolution, args.ga_cost_resolution)
@@ -506,6 +547,10 @@ def main() -> None:
     print(f"  JSON: {json_path}")
     print(f"  CSV : {csv_path}")
     print(f"  XLSX: {workbook_path}")
+    if power_schedule_dirs:
+        print("  Power schedules:")
+        for case_dir in power_schedule_dirs:
+            print(f"    {os.path.join(case_dir, 'power_schedule.png')}")
 
 
 if __name__ == "__main__":

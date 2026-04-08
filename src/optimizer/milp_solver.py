@@ -70,10 +70,12 @@ def fuel_consumption(P: float, alpha1: float, alpha2: float, alpha3: float) -> f
     Notes
     -----
     SFOC 곡선 계수는 g/kWh 기준이다.
-    따라서 SFOC(P)[g/kWh] * P[MW] = kg/h 가 된다.
+    SFOC 계수식은 출력 kW를 입력으로 사용한다.
+    따라서 SFOC(P_kW)[g/kWh] * P_kW / 1000 = kg/h 가 된다.
     """
-    sfoc_g_per_kwh = alpha1 * P ** 2 + alpha2 * P + alpha3
-    return sfoc_g_per_kwh * P # kg/h로 연료 소모율
+    P_kW = 1000.0 * P
+    sfoc_g_per_kwh = alpha1 * P_kW ** 2 + alpha2 * P_kW + alpha3
+    return sfoc_g_per_kwh * P_kW / 1000.0 # kg/h로 연료 소모율
 
 # PWL (Piecewise Linear) 근사
 # =============================================================================
@@ -136,11 +138,12 @@ class MILPSolver:
         # ── DG / ESS 사양 (kcs_specs.py에서 Import) ──
         from src.ship.kcs_specs import DG_SPECS, DG_MIN_LOAD_RATIO, ESS_SPECS
 
-        self.dg_specs = DG_SPECS # DG별 P_max, ramp_rate, min_up/down, cost_start
+        self.dg_specs = DG_SPECS # DG별 P_max, min_up/down, cost_start
         self.min_load_ratio = DG_MIN_LOAD_RATIO # DG 최소 부하 비율 
         self.dg_names = list(self.dg_specs.keys()) # DG Key
 
         self.ess = ESS_SPECS
+        self.ess_power_limit = float(self.ess["capacity"]) * float(self.ess["c_rate"])
 
         # ── SFOC 로드 ──
         self.sfoc_data = load_sfoc(sfoc_json_path)
@@ -308,13 +311,13 @@ class MILPSolver:
 
         # ESS 충전 전력 (MW) — 연속
         P_c = {
-            t: LpVariable(f"P_c_{t}", lowBound=0, upBound=self.ess["P_c_max"])
+            t: LpVariable(f"P_c_{t}", lowBound=0, upBound=self.ess_power_limit)
             for t in range(T)
         }
 
         # ESS 방전 전력 (MW) — 연속
         P_dc = {
-            t: LpVariable(f"P_dc_{t}", lowBound=0, upBound=self.ess["P_dc_max"])
+            t: LpVariable(f"P_dc_{t}", lowBound=0, upBound=self.ess_power_limit)
             for t in range(T)
         }
 
@@ -396,12 +399,12 @@ class MILPSolver:
 
             # ─── (1.5) ESS 동시 충방전 방지 ───
             prob += (
-                P_c[t] <= self.ess["P_c_max"] * u_ess[t],
+                P_c[t] <= self.ess_power_limit * u_ess[t],
                 f"ESS_Charge_Mode_{t}"
             )
 
             prob += (
-                P_dc[t] <= self.ess["P_dc_max"] * (1 - u_ess[t]),
+                P_dc[t] <= self.ess_power_limit * (1 - u_ess[t]),
                 f"ESS_Discharge_Mode_{t}"
             )
 
@@ -429,7 +432,6 @@ class MILPSolver:
             for dg in self.dg_names:
                 P_max_dg = self.dg_specs[dg]["P_max"]
                 P_min_dg = P_max_dg * self.min_load_ratio
-                ramp = self.dg_specs[dg]["ramp_rate"]
 
                 # ─── (3) DG 출력 상·하한 ───
                 prob += (
@@ -525,19 +527,6 @@ class MILPSolver:
                     y[dg, t] + z[dg, t] <= 1,
                     f"NoSimultaneous_{dg}_{t}"
                 )
-
-                # ─── (6) 증감발률 (Ramp Rate) ───
-                # |P_it - P_i,t-1| ≤ ramp × Δt × P_max
-                if t > 0:
-                    ramp_limit = ramp * dt[t] * P_max_dg
-                    prob += (
-                        P_dg[dg, t] - P_dg[dg, t - 1] <= ramp_limit,
-                        f"RampUp_{dg}_{t}"
-                    )
-                    prob += (
-                        P_dg[dg, t - 1] - P_dg[dg, t] <= ramp_limit,
-                        f"RampDown_{dg}_{t}"
-                    )
 
         # ─── (7) 최소 기동/정지 시간 ───
         for dg in self.dg_names:

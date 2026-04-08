@@ -53,21 +53,18 @@ POWER_MODEL = {
 DG_SPECS = {
     "DG1": {
         "P_max": 14.4,
-        "ramp_rate": 0.5,
         "min_up": 1.0,
         "min_down": 0.5,
         "cost_start": 170,
     },
     "DG2": {
         "P_max": 14.4,
-        "ramp_rate": 0.5,
         "min_up": 1.0,
         "min_down": 0.5,
         "cost_start": 170,
     },
     "DG3": {
         "P_max": 10.8,
-        "ramp_rate": 0.5,
         "min_up": 1.0,
         "min_down": 0.5,
         "cost_start": 120,
@@ -78,9 +75,8 @@ DG_SPECS = {
 DG_MIN_LOAD_RATIO = 0.25
 
 ESS_SPECS = {
-    "P_c_max": 15.0,
-    "P_dc_max": 15.0,
     "capacity": 30.0,
+    "c_rate": 0.5,
     "SOC_max": 0.90,
     "SOC_min": 0.30,
     "eta_c": 0.95,
