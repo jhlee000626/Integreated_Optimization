@@ -15,7 +15,7 @@ from src.ship.kcs_specs import KCS_ISO15016
 
 _RESISTANCE_ESTIMATOR = ResistanceEstimator()
 _PROPULSION_HELPER = PropulsionHelper()
-MAX_PROPULSION_LOAD_KW = 31920.0
+MAX_PROPULSION_LOAD_KW = 21700.0
 
 
 def wind_speed_to_beaufort(v_wind_ms: float) -> int:

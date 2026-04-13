@@ -32,8 +32,8 @@ KCS_PROPULSION = {
     "PropellerDiameter": 7.9,
     "AEAO": 0.65,
     "NumberOfBlades": 5,
-    "N_MCR": 90.0,
-    "DesignSpeed": 24.0,
+    "N_MCR": 89.0,
+    "DesignSpeed": 20.0,
     "eta_shaft": 0.98,
     "ContainerHeight": 2.6,
     "ContainerTiersOnDeck": 9,
@@ -84,10 +84,10 @@ ESS_SPECS = {
 }
 
 SERVICE_LOAD = {
-    "departure": 0.5,
-    "approach": 0.5,
-    "berthing": 0.5,
-    "cruising": 0.5,
+    "departure": 2.0,
+    "approach": 2.0,
+    "berthing": 2.0,
+    "cruising": 2.5,
 }
 
 # SERVICE_LOAD = {

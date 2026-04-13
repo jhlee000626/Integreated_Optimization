@@ -7,7 +7,6 @@ from __future__ import annotations
 import math
 
 import networkx as nx
-import numpy as np
 
 
 def haversine_nm(p1: tuple[float, float], p2: tuple[float, float]) -> float:
@@ -21,8 +20,25 @@ def haversine_nm(p1: tuple[float, float], p2: tuple[float, float]) -> float:
     return radius_nm * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
 
 
-def build_astar_graph(cost_map) -> nx.Graph:
-    """Build an 8-connected water-only graph whose edge weights are Earth distances."""
+def planar_map_distance(p1: tuple[float, float], p2: tuple[float, float]) -> float:
+    """Planar distance on the map grid without great-circle correction."""
+    return math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+
+
+def _distance(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    distance_mode: str,
+) -> float:
+    if distance_mode == "earth":
+        return haversine_nm(p1, p2)
+    if distance_mode == "grid":
+        return planar_map_distance(p1, p2)
+    raise ValueError(f"Unsupported distance_mode: {distance_mode}")
+
+
+def build_astar_graph(cost_map, distance_mode: str = "earth") -> nx.Graph:
+    """Build an 8-connected water-only graph with selectable edge distance metric."""
     if cost_map.cost_grid is None or cost_map.land_mask is None:
         raise RuntimeError("CostMap must be built before pathfinding.")
 
@@ -65,19 +81,28 @@ def build_astar_graph(cost_map) -> nx.Graph:
 
                 node_to = (next_lat, next_lon)
                 point_to = (cost_map.lats[next_lat], cost_map.lons[next_lon])
-                graph.add_edge(node_from, node_to, weight=haversine_nm(point_from, point_to))
+                graph.add_edge(
+                    node_from,
+                    node_to,
+                    weight=_distance(point_from, point_to, distance_mode=distance_mode),
+                )
 
     return graph
 
 
-def get_closest_node(cost_map, point: tuple[float, float], graph: nx.Graph):
+def get_closest_node(
+    cost_map,
+    point: tuple[float, float],
+    graph: nx.Graph,
+    distance_mode: str = "earth",
+):
     """Return the graph node closest to the given (lat, lon) point."""
     best_node = None
     best_dist = float("inf")
 
     for node in graph.nodes():
         node_point = (cost_map.lats[node[0]], cost_map.lons[node[1]])
-        dist = haversine_nm(node_point, point)
+        dist = _distance(node_point, point, distance_mode=distance_mode)
         if dist < best_dist:
             best_dist = dist
             best_node = node
@@ -87,30 +112,11 @@ def get_closest_node(cost_map, point: tuple[float, float], graph: nx.Graph):
     return best_node
 
 
-def interpolate_path(
-    path_coords: list[tuple[float, float]],
-    num_segments: int,
-) -> tuple[list[tuple[float, float]], float]:
-    """Resample a raw path into evenly spaced points by cumulative Earth distance."""
-    if len(path_coords) < 2:
-        return list(path_coords), 0.0
-
-    cumulative = [0.0]
-    for idx in range(1, len(path_coords)):
-        cumulative.append(cumulative[-1] + haversine_nm(path_coords[idx - 1], path_coords[idx]))
-
-    target = np.linspace(0.0, cumulative[-1], num_segments + 1)
-    lats = [point[0] for point in path_coords]
-    lons = [point[1] for point in path_coords]
-    interp_lats = np.interp(target, cumulative, lats)
-    interp_lons = np.interp(target, cumulative, lons)
-    return list(zip(interp_lats, interp_lons)), cumulative[-1]
-
-
 def compress_path_to_waypoints(
     raw_path: list[tuple[float, float]],
     cost_map,
     num_segments: int,
+    distance_mode: str = "earth",
 ) -> tuple[list[tuple[float, float]], float]:
     """
     Compress a raw A* path into exactly `num_segments + 1` waypoints while preserving
@@ -121,7 +127,10 @@ def compress_path_to_waypoints(
 
     cumulative = [0.0]
     for idx in range(1, len(raw_path)):
-        cumulative.append(cumulative[-1] + haversine_nm(raw_path[idx - 1], raw_path[idx]))
+        cumulative.append(
+            cumulative[-1]
+            + _distance(raw_path[idx - 1], raw_path[idx], distance_mode=distance_mode)
+        )
 
     total_distance_nm = cumulative[-1]
     n_points = len(raw_path)
@@ -216,17 +225,18 @@ def build_astar_route_points(
     start_point: tuple[float, float],
     goal_point: tuple[float, float],
     num_segments: int,
+    distance_mode: str = "earth",
 ) -> tuple[list[tuple[float, float]], list[tuple[float, float]], float]:
     """Build the raw A* water path and compress it into route waypoints."""
-    graph = build_astar_graph(cost_map)
-    start_node = get_closest_node(cost_map, start_point, graph)
-    goal_node = get_closest_node(cost_map, goal_point, graph)
+    graph = build_astar_graph(cost_map, distance_mode=distance_mode)
+    start_node = get_closest_node(cost_map, start_point, graph, distance_mode=distance_mode)
+    goal_node = get_closest_node(cost_map, goal_point, graph, distance_mode=distance_mode)
     goal_coords = (cost_map.lats[goal_node[0]], cost_map.lons[goal_node[1]])
 
     def heuristic(node_a, node_b):
         del node_b
         point_a = (cost_map.lats[node_a[0]], cost_map.lons[node_a[1]])
-        return haversine_nm(point_a, goal_coords)
+        return _distance(point_a, goal_coords, distance_mode=distance_mode)
 
     path_idx = nx.astar_path(
         graph,
@@ -236,5 +246,10 @@ def build_astar_route_points(
         weight="weight",
     )
     raw_path = [(cost_map.lats[i], cost_map.lons[j]) for i, j in path_idx]
-    waypoints, total_dist_nm = compress_path_to_waypoints(raw_path, cost_map, num_segments)
+    waypoints, total_dist_nm = compress_path_to_waypoints(
+        raw_path,
+        cost_map,
+        num_segments,
+        distance_mode=distance_mode,
+    )
     return raw_path, waypoints, total_dist_nm

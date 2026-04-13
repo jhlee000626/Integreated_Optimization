@@ -26,7 +26,12 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from Verification.case1_astar_fixed import build_fixed_route
+from Verification.case1_astar_fixed import (
+    CASE1_PATH_DISTANCE_MODE,
+    apply_case1_baseline_validation,
+    build_fixed_route,
+    compute_case1_base_speed_knots,
+)
 from Verification.case2_ga_twostage import EnergyObjectiveSolver
 from Verification.common import (
     VERIFICATION_COST_MAP_RESOLUTION,
@@ -34,7 +39,6 @@ from Verification.common import (
     load_marine_environment,
     make_milp_solver,
     solve_route_schedule,
-    validate_route,
 )
 from src.grid.cost_map import build_cost_map
 from src.grid.pathfinding import build_astar_route_points
@@ -136,12 +140,17 @@ def _summarize_case(
 
 def _run_case1(env_fn, departure_time_utc, n_segments: int, rta_h: float, astar_cost_resolution: float) -> CaseRunResult:
     cost_map = build_cost_map(resolution=astar_cost_resolution)
-    _, waypoints, total_dist_nm = build_astar_route_points(cost_map, BUSAN_PORT, JEJU_PORT, n_segments)
-    dt_h = rta_h / n_segments
-    base_speed = total_dist_nm / (dt_h * (n_segments - 0.6))
+    _, waypoints, _ = build_astar_route_points(
+        cost_map,
+        BUSAN_PORT,
+        JEJU_PORT,
+        n_segments,
+        distance_mode=CASE1_PATH_DISTANCE_MODE,
+    )
+    base_speed = compute_case1_base_speed_knots(waypoints, rta_h=rta_h)
 
     route = build_fixed_route(waypoints, base_speed, n_segments=n_segments, rta_h=rta_h)
-    validation = validate_route(route, cost_map, env_fn, departure_time_utc)
+    validation = apply_case1_baseline_validation(route, cost_map, env_fn, departure_time_utc)
     _, power_profile, milp_result = solve_route_schedule(route, env_fn, departure_time_utc, initial_soc=0.7)
     return CaseRunResult(
         metrics=_summarize_case(

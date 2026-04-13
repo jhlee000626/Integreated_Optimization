@@ -52,7 +52,7 @@ def main():
             n_segments=N_SEGMENTS,
             rta_h=RTA_HOURS,
             pop_size=100,
-            n_gen=200,
+            n_gen=500,
             seed=42,
             n_workers=1,
             smoothing_weight=0.0,
