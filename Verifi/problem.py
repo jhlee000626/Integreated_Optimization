@@ -1,267 +1,329 @@
-import pandas as pd
+from __future__ import annotations
+
+from functools import lru_cache
+
 import numpy as np
-from pulp import LpMinimize, LpProblem, LpStatus, LpVariable, lpSum, value, LpBinary, LpContinuous
-import math
-from spec import(DG_SPECS, DT, ESS_PARAMS, PROP_SPECS, RESERVE_PROPULSION, RESERVE_SERVICE, SERVICE_LOAD, T_TOTAL, V_MAX)
+from scipy.optimize import differential_evolution
 
-def piecewise_linear(x, breakpoints, values):
-    if x <= breakpoints[0]:
-        return values[0]
-    if x >= breakpoints[-1]:
-        return values[-1]
+from spec import (
+    DISTANCES,
+    ESS_PARAMS,
+    GEN_PARAMS,
+    K,
+    N,
+    P_ser,
+    SPEED_MARGINS,
+    SPEED_NOMINAL,
+    VOYAGE_STAGES,
+    dt,
+    time_steps,
+)
 
-    for i in range(1, len(breakpoints)):
-        if x < breakpoints[i]:
-            y1 = values[i-1]
-            y2 = values[i]
-            value = y1 + (y2 - y1) * (x - breakpoints[i-1]) / (breakpoints[i] - breakpoints[i-1])
-            return value
+try:
+    from docplex.mp.model import Model
+except ModuleNotFoundError as exc:  # pragma: no cover - depends on local env
+    Model = None
+    _DOCPLEX_IMPORT_ERROR = exc
+else:
+    _DOCPLEX_IMPORT_ERROR = None
 
-    return values[-1]
+
+def _ensure_docplex_available():
+    if Model is None:
+        raise ModuleNotFoundError(
+            "docplex is required to build this model. Install it with `pip install docplex`."
+        ) from _DOCPLEX_IMPORT_ERROR
 
 
-def breakpoints_and_values(V_min, V_max, num_points=5):
-    breakpoints = np.linspace(V_min, V_max, num_points)
-    values = [
-        PROP_SPECS["C1"] * np.power(V, PROP_SPECS["C2"]) + PROP_SPECS["C3"] * V
-        for V in breakpoints
-    ]
-    return breakpoints, values
+def _is_dragging_stage(t, voyage_stages):
+    return t in voyage_stages["T_dra"]
 
-class MILPSolver:
-    def __init__(self, n_pwl_segments=5, solver_name="CBC", profile="profile.csv"):
-        self.dg_specs = DG_SPECS
-        self.dg_names = list(DG_SPECS.keys())
-        self.ess_params = ESS_PARAMS
-        self.service_load = SERVICE_LOAD
-        self.reserve_propulsion = RESERVE_PROPULSION
-        self.reserve_service = RESERVE_SERVICE
-        self.n_pwl_segments = n_pwl_segments
-        self.solver_name = solver_name
-        self.dt = DT
-        self.t_total = T_TOTAL
-        self.ess_dch_max = self.ess_params['P_max'] * self.ess_params['eta_dch'] # ESS 최대 방전 전력 (MW)
-        self.ess_ch_max = self.ess_params['P_max'] / self.ess_params['eta_ch'] # ESS 최대 충전 전력 (MW)
-        self.ess_rating = self.ess_params['E_rat'] # ESS 정격 용량 (MWh)
-        self.SOC_MAX = self.ess_params['SOC_max']
-        self.SOC_MIN = self.ess_params['SOC_min']
-        self.initial_SOC = self.ess_params['SOC_0']
-        self.eta_ch = self.ess_params['eta_ch']
-        self.eta_dch = self.ess_params['eta_dch']
-        self.eta_rt = self.ess_params['eta_rt']
-        self.profile = pd.read_csv(profile)
-        self.V_MAX = self.profile['Max Speed']
-        self.V_MIN = self.profile['Min Speed']
-        breakpoints, values = breakpoints_and_values(0, 30, self.n_pwl_segments)
-        self.propulsion_breakpoints = {
-            "breakpoints": breakpoints.tolist(),
-            "values": values,
-        }
 
-        self.service_load = SERVICE_LOAD
+def _calculate_true_nonlinear_power_by_mode(v, is_dragging):
+    if v <= 0:
+        return 0.0
 
-    # ---------------------------------------------------------
-    # 연료비 선형화 계수 추출 메서드 
-    # ---------------------------------------------------------
-    def _get_fuel_pwl_lines(self, dg_name, num_segments=4):
-        specs = self.dg_specs[dg_name]
-        a1, a2, a3 = specs['alpha1'], specs['alpha2'], specs['alpha3']
-        P_max = specs['P_max']
-        
-        breakpoints = np.linspace(0, P_max, num_segments + 1)
-        lines = []
-        
-        for i in range(num_segments):
-            x1, x2 = breakpoints[i], breakpoints[i+1]
-            y1 = a1*(x1/P_max)**2 + a2*(x1/P_max) + a3
-            y2 = a1*(x2/P_max)**2 + a2*(x2/P_max) + a3
-            
-            slope = (y2 - y1) / (x2 - x1)  
-            intercept = y1 - slope * x1    
-            lines.append({'slope': slope, 'intercept': intercept})
-            
-        return lines
+    # ★ 추가: knots 단위의 속도를 m/s로 변환 (1 knot = 0.514444 m/s)
+    speed_ms = v * 0.514444
+
+    c1 = 1.67e-3
+    c2 = 1.83
+    c3 = 0.147
+    c4 = 1.74
+    c5 = 0.15
+    eta_pl = 0.97
+
+    L_tug, B_tug, D_tug, CB_tug = 38.5, 10.6, 3.7, 0.97
+    L_ves, B_ves, D_ves, CB_ves = 91.5, 24.5, 2.5, 0.95
+
+    # ★ 수정: 변환된 speed_ms를 공식에 적용
+    def get_resistance(L, B, D, CB, speed):
+        frictional_resistance = c1 * L * (B + 2 * D) * (speed ** c2)
+        residual_resistance = c3 * CB * B * D * (speed ** (c4 + c5 * speed))
+        return frictional_resistance + residual_resistance
+
+    total_resistance = get_resistance(L_tug, B_tug, D_tug, CB_tug, speed_ms)
+
+    if is_dragging:
+        total_resistance += get_resistance(L_ves, B_ves, D_ves, CB_ves, speed_ms)
+
+    # ★ 수정: Power(kW) = Resistance(kN) * Speed(m/s)
+    power_kw = (total_resistance * speed_ms) / eta_pl
     
-    #---------------------------------------------------------
-    # 연료비
-    #---------------------------------------------------------
-    def _add_fuel_cost_constraints(self, prob, P_dg, Fuel_cost, u, T):
-        """Fuel_cost 변수를 실제 P_dg 발전량과 묶어주는 제약조건"""
-        for dg in self.dg_names:
-            pwl_lines = self._get_fuel_pwl_lines(dg, num_segments=4)
-            for t in range(T):
-                for line in pwl_lines:
-                    # 발전기가 켜져있을 때(u=1)만 직선 절편이 활성화됨
-                    prob += Fuel_cost[dg, t] >= line['slope'] * P_dg[dg, t] + line['intercept'] * u[dg, t], f"PWL_Fuel_{dg}_{t}_{line['slope']:.2f}"
+    # ★ 추가: 발전기 용량과 단위를 맞추기 위해 kW를 MW로 변환
+    power_mw = power_kw / 1000.0
+
+    return power_mw
+
+def calculate_true_nonlinear_power(v, t, voyage_stages):
+    return _calculate_true_nonlinear_power_by_mode(v, _is_dragging_stage(t, voyage_stages))
 
 
-    def solve(self, P_propulsion, P_service, dt, initial_SOC, initial_DG_Status):
-        # MILP 모델 구축 및 최적화 로직 구현
+@lru_cache(maxsize=None)
+def _find_optimal_segments_cached(v_min, v_max, segment_count, is_dragging):
+    if segment_count < 1:
+        raise ValueError("segment_count must be at least 1.")
 
-        T = T
-        if initial_DG_Status is None:
-            initial_DG_Status = {dg: 0 for dg in self.dg_names}
-        
-        # 문제 정의
-        prob = LpProblem("Optimal Scheduling", LpMinimize)
+    if segment_count == 1:
+        return (v_min, v_max)
 
-        # 결정 변수
+    num_samples = 100
+    v_samples = np.linspace(v_min, v_max, num_samples)
+    g_samples = np.array(
+        [_calculate_true_nonlinear_power_by_mode(v, is_dragging) for v in v_samples]
+    )
 
-        # -----------------------------------------------
-        # 이진 변수
-        # -----------------------------------------------
-        # DG ON/OFF 상태 변수
-        u = {(dg, t): LpVariable(f"u_{dg}_{t}", cat=LpBinary)
-            for dg in self.dg_names for t in range(T)}
-        
-        # DG 기동 변수(Start-up, event 변수)
-        y = {(dg,t) : LpVariable(f"y_{dg}_{t}", cat=LpBinary)
-            for dg in self.dg_names for t in range(T)}
+    def objective(breakpoints):
+        sorted_breakpoints = np.sort(breakpoints)
+        x_full = np.concatenate(([v_min], sorted_breakpoints, [v_max]))
+        g_full = np.array(
+            [_calculate_true_nonlinear_power_by_mode(x, is_dragging) for x in x_full]
+        )
+        g_interp = np.interp(v_samples, x_full, g_full)
+        return float(np.sum((g_samples - g_interp) ** 2))
 
-        u_ch = {t: LpVariable(f"u_ch_{t}", cat=LpBinary) for t in range(T)} # ESS 충전 상태 변수
+    bounds = [(v_min + 0.1, v_max - 0.1)] * (segment_count - 1)
+    result = differential_evolution(
+        objective,
+        bounds,
+        popsize=50,
+        maxiter=1000,
+        mutation=0.5,
+        recombination=0.5,
+        atol=1e-4,
+        seed=0,
+    )
 
-        u_dch = {t: LpVariable(f"u_dch_{t}", cat=LpBinary) for t in range(T)} # ESS 방전 상태 변수
+    best_breakpoints = np.sort(result.x)
+    optimal_x_points = np.concatenate(([v_min], best_breakpoints, [v_max]))
+    return tuple(optimal_x_points.tolist())
 
-        # -----------------------------------------------
-        # 연속 변수
-        # -----------------------------------------------
-        # DG 출력 변수
-        P_dg = {(dg, t): LpVariable(f"P_{dg}_{t}", lowBound=0)
-                for dg in self.dg_names for t in range(T)}
-        
-        # ESS 방전량 변수
-        P_dc = {t: LpVariable(f"P_dch_{t}", lowBound=0, upBound=self.ess_dch_max, cat=LpContinuous) for t in range(T)} 
 
-        # ESS 충전량 변수
-        P_c = {t: LpVariable(f"P_ch_{t}", lowBound=0, upBound=self.ess_ch_max, cat=LpContinuous) for t in range(T)}
+def find_optimal_segments(v_min, v_max, segment_count, t, voyage_stages):
+    is_dragging = _is_dragging_stage(t, voyage_stages)
+    return list(_find_optimal_segments_cached(v_min, v_max, segment_count, is_dragging))
 
-        # SOC 변수
-        SOC = {t: LpVariable(f"SOC_{t}", lowBound=self.ess_params['SOC_min'], upBound=self.ess_params['SOC_max'], cat=LpContinuous) for t in range(T)} 
 
-        P_dg_avail = {(dg, t): LpVariable(f"P_avail_{dg}_{t}", lowBound=0) for dg in self.dg_names for t in range(T)}
+def _get_speed_bounds(t):
+    if t in VOYAGE_STAGES["T_doc"]:
+        nominal = SPEED_NOMINAL["doc"]
+        margin = SPEED_MARGINS["mu1"]
+        return nominal * (1 - margin), nominal * (1 + margin)
 
-        # 속도 변수
-        Vel = {t: LpVariable(f"Vel_{t}", lowBound=self.V_MIN[t], upBound=self.V_MAX[t], cat=LpContinuous) for t in range(T)}
+    if t in VOYAGE_STAGES["T_cru"]:
+        nominal = SPEED_NOMINAL["cru"]
+        margin = SPEED_MARGINS["lambda"]
+        return nominal * (1 - margin), nominal * (1 + margin)
 
-        # 추진 부하 변수
-        P_prop = {t: LpVariable(f"P_prop_{t}", lowBound=0, cat=LpContinuous) for t in range(T)}
-        
-        # 람다 변수 (P_propulsion과 Vel의 곱을 선형화하기 위한 변수, SO2 제약식에서 사용)
-        K = len(self.propulsion_breakpoints['breakpoints'])
-        Lambda = {(t, k): LpVariable(f"Lambda_{t}_{k}", lowBound=0, upBound=1, cat=LpContinuous) for t in range(T) for k in range(K)}
+    if t in VOYAGE_STAGES["T_dra"]:
+        nominal = SPEED_NOMINAL["dra"]
+        margin = SPEED_MARGINS["epsilon"]
+        return nominal * (1 - margin), nominal * (1 + margin)
 
-        # 연료 비용 변수
-        Fuel_cost = {(dg,t): LpVariable(f"Fuel_cost_{dg}_{t}", lowBound=0, cat=LpContinuous) for dg in self.dg_names for t in range(T)}
-        # -----------------------------------------------
-        # 목적 함수
-        # -----------------------------------------------
-        # 마모 비용 미리계산
-        C_ESS_Deg = self.ess_params['C_rep'] / (self.ess_params['L_cycle'] * np.sqrt(self.ess_params['eta_rt']))  
+    if t in VOYAGE_STAGES["T_dep"]:
+        nominal = SPEED_NOMINAL["dep"]
+        margin = SPEED_MARGINS["mu2"]
+        return nominal * (1 - margin), nominal * (1 + margin)
 
-        # 연료 비용 + DG 기동 비용 + ESS 사이클 비용 => 연료비용 수정 필요
-        prob += (
-            lpSum(Fuel_cost[dg, t] * self.dt for dg in self.dg_names for t in range(T))
-            + lpSum(y[dg, t] * self.dg_specs[dg]['C_SU'] for dg in self.dg_names for t in range(T))
-            + lpSum(C_ESS_Deg * P_dc[t]/self.eta_dch * self.dt for t in range(T))
+    return 0.0, 0.0
+
+
+def _solve_status_text(model):
+    solve_details = getattr(model, "solve_details", None)
+    if solve_details is not None:
+        status = getattr(solve_details, "status", None)
+        if status:
+            return str(status)
+
+    solve_status = getattr(model, "solve_status", None)
+    if solve_status is not None:
+        return str(solve_status)
+
+    return "unknown"
+
+
+def solve_tugboat_scheduling():
+    _ensure_docplex_available()
+
+    model = Model(name="Electric_Tugboat_MIQP")
+
+    unit_time_keys = [(k, t) for k in range(1, K + 1) for t in time_steps]
+    ess_time_keys = [(n, t) for n in range(1, N + 1) for t in time_steps]
+    soc_keys = [(n, t) for n in range(1, N + 1) for t in [0] + time_steps]
+
+    segment_count = 7
+    piecewise_weight_keys = [
+        (t, m) for t in time_steps for m in range(1, segment_count + 2)
+    ]
+    piecewise_selector_keys = [
+        (t, m) for t in time_steps for m in range(1, segment_count + 1)
+    ]
+
+    P_shore = model.continuous_var_dict(time_steps, lb=0, name='P_shore')
+    u = model.binary_var_dict(unit_time_keys, name="u")
+    P_G = model.continuous_var_dict(unit_time_keys, lb=0, name="P_G")
+    P_c = model.continuous_var_dict(ess_time_keys, lb=0, name="P_c")
+    P_dc = model.continuous_var_dict(ess_time_keys, lb=0, name="P_dc")
+    SOC = model.continuous_var_dict(
+        soc_keys,
+        lb=ESS_PARAMS["SOC_min"],
+        ub=ESS_PARAMS["SOC_max"],
+        name="SOC",
+    )
+    w_var = model.continuous_var_dict(piecewise_weight_keys, lb=0, ub=1, name="w")
+    l_var = model.binary_var_dict(piecewise_selector_keys, name="l")
+    V = model.continuous_var_dict(time_steps, lb=0, name="V")
+    P_pl = model.continuous_var_dict(time_steps, lb=0, name="P_pl")
+
+    # ★ 수정: GEN_PARAMS[k]["a2"] * (P_G[k, t] ** 2) 추가
+    objective = model.sum(
+        GEN_PARAMS[k]["a0"] * u[k, t] 
+        + GEN_PARAMS[k]["a1"] * P_G[k, t] 
+        + GEN_PARAMS[k]["a2"] * (P_G[k, t] ** 2) 
+        for t in time_steps
+        for k in range(1, K + 1)
+    ) + model.sum(
+        ESS_PARAMS["F_B"] * (P_c[n, t] + P_dc[n, t])
+        for t in time_steps
+        for n in range(1, N + 1)
+    )
+    
+    model.minimize(objective)
+
+    for n in range(1, N + 1):
+        model.add_constraint(SOC[n, 0] == 1.0, ctname=f"Initial_SOC_Bat_{n}")
+
+    for t in time_steps:
+        model.add_constraint(
+            model.sum(P_G[k, t] for k in range(1, K + 1))
+            + model.sum(P_dc[n, t] - P_c[n, t] for n in range(1, N + 1))
+            + P_shore[t]
+            == P_pl[t] + P_ser,
+            ctname=f"PowerBalance_t{t}",
         )
 
-        # -----------------------------------------------
-        # 제약 조건
-        # -----------------------------------------------
+        if t not in VOYAGE_STAGES['T_ber']:
+            model.add_constraint(P_shore[t] == 0, ctname=f"NoshorePower_t{t}")
 
-        # 발전기 출력과 연료비를 연결하는 제약식 추가
-        self._add_fuel_cost_constraints(prob, P_dg, Fuel_cost, u, T)
+        for k in range(1, K + 1):
+            model.add_constraint(
+                P_G[k, t] >= GEN_PARAMS[k]["Pmin"] * u[k, t],
+                ctname=f"GenMin_{k}_t{t}",
+            )
+            model.add_constraint(
+                P_G[k, t] <= GEN_PARAMS[k]["Pmax"] * u[k, t],
+                ctname=f"GenMax_{k}_t{t}",
+            )
 
-        # 전력 수급 균형
-        for t in range(T):
-            prob += (lpSum(P_dg[dg, t] for dg in self.dg_names) + P_dc[t] - P_c[t] == P_propulsion[t] + P_service[t])
+        for n in range(1, N + 1):
+            model.add_constraint(
+                P_c[n, t] <= ESS_PARAMS["P_c_max"],
+                ctname=f"Bat_ChargeMax_{n}_t{t}",
+            )
+            model.add_constraint(
+                P_dc[n, t] <= ESS_PARAMS["P_dc_max"],
+                ctname=f"Bat_DischargeMax_{n}_t{t}",
+            )
+            model.add_constraint(
+                SOC[n, t]
+                == SOC[n, t - 1]
+                + (ESS_PARAMS["eff_c"] * P_c[n, t] * dt) / ESS_PARAMS["Cap"]
+                - (P_dc[n, t] * dt) / (ESS_PARAMS["eff_dc"] * ESS_PARAMS["Cap"]),
+                ctname=f"SOC_update_{n}_t{t}",
+            )
 
-        # DG ON/OFF 상태와 기동 변수 연결
-        for dg in self.dg_names:
-            for t in range(T):
-                if t == 0:
-                    prob += (y[dg, t] >= u[dg, t] - initial_DG_Status[dg])
-                else:
-                    prob += (y[dg, t] >= u[dg, t] - u[dg, t-1])
-        
-        # 최소/최대 기동 제약
-        for dg in self.dg_names:
-            min_up = math.ceil(self.dg_specs[dg]['T_ON'] / self.dt)
-            min_down = math.ceil(self.dg_specs[dg]['T_OFF'] / self.dt)
-            for t in range(T):
-                # 시점이 min_up보다 작을 때는 초기 상태를 고려하여 제약식 설정, 그렇지 않으면 일반적인 최소 ON 시간 제약식 적용
-                # t시점에 발전기가 켜져있다면, 과거 min_up 시점까지 발전기가 켜져있어야 함
-                if t < min_up:
-                    prob += (lpSum(y[dg, tau] for tau in range(t+1)) <= u[dg, t])
-                else:
-                    prob += (lpSum(y[dg, tau] for tau in range(t-min_up+1, t+1)) <= u[dg, t])
-                # t시점에 발전기가 꺼져있다면, 과거 min_down 시점까지 발전기가 꺼져있어야 함
-                if t < min_down:
-                    prob += (lpSum(y[dg, tau] for tau in range(t+1)) <= 1 - initial_DG_Status[dg])
-                else:
-                    prob += (lpSum(y[dg, tau] for tau in range(t-min_down+1, t+1)) <= 1 - u[dg, t-min_down])
+        speed_lb, speed_ub = _get_speed_bounds(t)
+        if speed_lb == speed_ub:
+            model.add_constraint(V[t] == speed_lb, ctname=f"SpeedFix_t{t}")
+        else:
+            model.add_constraint(V[t] >= speed_lb, ctname=f"SpeedLB_t{t}")
+            model.add_constraint(V[t] <= speed_ub, ctname=f"SpeedUB_t{t}")
 
-        # 발전 출력 및 증감률 제약
-        for dg in self.dg_names:
-            P_min = self.dg_specs[dg]['P_min']
-            P_max = self.dg_specs[dg]['P_max']
-            for t in range(T):
-                # 발전 출력 범위 제약
-                prob += P_dg[dg, t] >= P_min * u[dg, t]
-                prob += P_dg[dg, t] <= P_dg_avail[dg, t]  # 가용 출력 제약
-                prob += P_dg_avail[dg, t] <= P_max * u[dg, t]
+        v_min, v_max = 0.0, 12.0
+        x_points = find_optimal_segments(v_min, v_max, segment_count, t, VOYAGE_STAGES)
+        g_points = [calculate_true_nonlinear_power(x, t, VOYAGE_STAGES) for x in x_points]
 
-                Ramp_up_MW = P_max * self.dg_specs[dg]['Ramp_up'] 
-                Ramp_down_MW = P_max * self.dg_specs[dg]['Ramp_down']
-                Ramp_start_MW = P_min
+        model.add_constraint(
+            V[t]
+            == model.sum(
+                w_var[t, m] * x_points[m - 1] for m in range(1, segment_count + 2)
+            ),
+            ctname=f"SpeedPiecewise_t{t}",
+        )
+        model.add_constraint(
+            P_pl[t]
+            == model.sum(
+                w_var[t, m] * g_points[m - 1] for m in range(1, segment_count + 2)
+            ),
+            ctname=f"PowerPiecewise_t{t}",
+        )
+        model.add_constraint(
+            model.sum(w_var[t, m] for m in range(1, segment_count + 2)) == 1,
+            ctname=f"WeightSum_t{t}",
+        )
+        model.add_constraint(
+            model.sum(l_var[t, m] for m in range(1, segment_count + 1)) == 1,
+            ctname=f"SelectorSum_t{t}",
+        )
+        model.add_constraint(w_var[t, 1] <= l_var[t, 1], ctname=f"SOS2_left_t{t}")
+        model.add_constraint(
+            w_var[t, segment_count + 1] <= l_var[t, segment_count],
+            ctname=f"SOS2_right_t{t}",
+        )
+        for m in range(2, segment_count + 1):
+            model.add_constraint(
+                w_var[t, m] <= l_var[t, m - 1] + l_var[t, m],
+                ctname=f"SOS2_mid_t{t}_{m}",
+            )
 
-                if t > 0:
-                    # Ramp Up 제약 
-                    prob += P_dg_avail[dg, t] - P_dg[dg, t-1] <= Ramp_up_MW * u[dg, t-1] + Ramp_start_MW * y[dg, t]
-                    # Ramp Down 제약
-                    prob += P_dg[dg, t-1] - P_dg[dg, t] <= Ramp_down_MW * u[dg, t-1]
+    dist_AB = model.sum(V[t] * dt for t in VOYAGE_STAGES["T_doc"] + VOYAGE_STAGES["T_cru"])
+    model.add_constraint(dist_AB >= DISTANCES["D_AB"] * 0.99, ctname="DistAB_LB")
+    model.add_constraint(dist_AB <= DISTANCES["D_AB"] * 1.01, ctname="DistAB_UB")
 
-        for t in range(T):
-            # ESS 충방전 변수 제약
-            prob += u_ch[t] + u_dch[t] == 1
-            # ESS 충전 출력 제약
-            # ESS 충전 시, 배터리의 충전 효율(eta_ch)과 왕복 효율(eta_rt)을 고려하여 충전량은 최대 충전 전력보다 크게 충전됨
-            prob += P_c[t] <= self.ess_ch_max * u_ch[t]/(self.eta_ch * np.sqrt(self.eta_rt))
-            # ESS 방전 출력 제약
-            # ESS 방전 시, 배터리의 왕복 효율, 방전 효율을 고려하여 방전량은 최대량보다 작음
-            prob += P_dc[t] <= self.ess_dch_max * u_dch[t] * np.sqrt(self.eta_rt) * self.eta_dch
+    total_active_stages = (
+        VOYAGE_STAGES["T_doc"]
+        + VOYAGE_STAGES["T_cru"]
+        + VOYAGE_STAGES["T_dra"]
+        + VOYAGE_STAGES["T_dep"]
+    )
+    dist_AC = model.sum(V[t] * dt for t in total_active_stages)
+    model.add_constraint(dist_AC >= DISTANCES["D_AC"] * 0.99, ctname="DistAC_LB")
+    model.add_constraint(dist_AC <= DISTANCES["D_AC"] * 1.01, ctname="DistAC_UB")
 
-            # 식 21의 SOC 업데이트 제약식(식에서는 ESS_Level로 표현, 코드에서는 SOC로 표현)
-            if t == 0:
-                prob += SOC[t] == initial_SOC + (P_c[t] * np.sqrt(self.eta_rt) * self.eta_ch - P_dc[t] / (self.eta_dch * np.sqrt(self.eta_rt))) * self.dt / self.ess_rating
-            else:
-                prob += SOC[t] == SOC[t-1] + (P_c[t] * np.sqrt(self.eta_rt) * self.eta_ch - P_dc[t] / (self.eta_dch * np.sqrt(self.eta_rt))) * self.dt / self.ess_rating
+    try:
+        solution = model.solve(log_output=True)
+    except Exception as exc:  # pragma: no cover - depends on local solver
+        print(f"Optimization failed while solving the docplex model: {exc}")
+        return model, P_G, P_c, P_dc, V
 
-            # SOC 범위 제약
-            prob += SOC[t] >= self.SOC_MIN
-            prob += SOC[t] <= self.SOC_MAX
+    print(f"Optimization Status: {_solve_status_text(model)}")
+    if solution is not None:
+        print(f"Total Objective Cost: ${solution.objective_value:.2f}")
+    else:
+        print("Warning: docplex did not return a feasible solution.")
 
-        # SOC 초기값 == 마지막 SOC제약 준수
-        prob += SOC[T-1] == self.initial_SOC 
+    return model, P_G, P_c, P_dc, V
 
-        # 속도, 추진 부하 SO2 제약
-        for t in range(T):
-            # 해당 t 시점의 람다 변수의 총합은 1
-            prob += lpSum(Lambda[t, k] for k in range(K)) == 1, f"Lambda_sum_{t}"
-
-            # 현재 속도는 람다 변수에 따른 가중 평균
-            prob += Vel[t] == lpSum(Lambda[t, k] * self.propulsion_breakpoints['breakpoints'][k] for k in range(K))
-
-            # 현재 추진 부하는 람다 변수에 따른 가중 평균
-            prob += P_prop[t] == lpSum(Lambda[t, k] * self.propulsion_breakpoints['values'][k] for k in range(K))
-
-        # 거리 제약
-
-        # 부하 예비력 제약
-
-        # 고장 예비력 제약
-        
 
 if __name__ == "__main__":
-    test = MILPSolver()
-    print(test.propulsion_breakpoints)
+    solve_tugboat_scheduling()

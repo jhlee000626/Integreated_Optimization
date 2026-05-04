@@ -14,7 +14,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.grid.cost_map import build_cost_map
-from src.grid.no_go_zone import BUSAN_PORT, JEJU_PORT
+from src.grid.no_go_zone import BUSAN_PORT, SHANGHAI_PORT
 from src.optimizer.ga_engine import (
     N_SEGMENTS,
     RTA_HOURS,
@@ -70,11 +70,11 @@ def main():
         f"current {busan_env.current_speed_ms:.2f} m/s @ {busan_env.current_dir_deg:.0f} deg | "
         f"wave Hs {busan_env.wave_height_m:.2f} m"
     )
-    jeju_env = env_fn(*JEJU_PORT, departure_time_utc)
+    shanghai_env = env_fn(*SHANGHAI_PORT, departure_time_utc)
     print(
-        f"  Jeju env: wind {jeju_env.wind_speed_ms:.1f} m/s @ {jeju_env.wind_dir_deg:.0f} deg | "
-        f"current {jeju_env.current_speed_ms:.2f} m/s @ {jeju_env.current_dir_deg:.0f} deg | "
-        f"wave Hs {jeju_env.wave_height_m:.2f} m"
+        f"  Shanghai env: wind {shanghai_env.wind_speed_ms:.1f} m/s @ {shanghai_env.wind_dir_deg:.0f} deg | "
+        f"current {shanghai_env.current_speed_ms:.2f} m/s @ {shanghai_env.current_dir_deg:.0f} deg | "
+        f"wave Hs {shanghai_env.wave_height_m:.2f} m"
     )
     print(f"  Departure time (UTC): {departure_time_utc.isoformat()}")
 
@@ -87,7 +87,7 @@ def main():
     print("\n" + "=" * 60)
     print(" [Phase 4] GA run")
     print("=" * 60)
-    direct_dist = haversine_nm(BUSAN_PORT, JEJU_PORT)
+    direct_dist = haversine_nm(BUSAN_PORT, SHANGHAI_PORT)
     print(f"  Direct distance: {direct_dist:.1f} nm")
 
     ga_result = setup_ga(

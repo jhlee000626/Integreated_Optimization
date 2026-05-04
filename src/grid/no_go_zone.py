@@ -8,9 +8,9 @@ Natural Earth 10m 해상도 실제 해안선 데이터를 사용하여
     1. Natural Earth 10m Land shapefile (기본 — geopandas 로드)
     2. GSHHG shapefile (고정밀 옵션)
 
-부산 → 제주 바운딩 박스:
-    lat: 32.0°N ~ 36.0°N
-    lon: 125.0°E ~ 131.0°E
+부산 → 상하이 바운딩 박스:
+    lat: 30.0°N ~ 36.0°N
+    lon: 121.0°E ~ 131.0°E
 """
 
 import os
@@ -20,21 +20,20 @@ from typing import Optional
 
 
 # =============================================================================
-# 부산-제주 해역 바운딩 박스
+# 부산-상하이 해역 바운딩 박스
 # =============================================================================
 
-BUSAN_JEJU_BOUNDS = {
-    "lat_min": 32.0,
+BUSAN_SHANGHAI_BOUNDS = {
+    "lat_min": 30.0,
     "lat_max": 36.0,
-    "lon_min": 125.0,
+    "lon_min": 121.0,
     "lon_max": 131.0,
 }
 
-BUSAN_PORT = (35.075, 129.113)   # (lat, lon)
-JEJU_PORT  = (33.545, 126.558)   # (lat, lon)
-
-# Natural Earth 10m 데이터 기본 경로
-# __file__로 절대경로 산출하고, data, ne_10m_land 폴더에 land shape파일 경로 설정
+# BUSAN_PORT = (35.075, 129.113)   # 원래 좁은 항구 위치 (영도 안쪽)
+BUSAN_PORT = (34.950, 129.150)   # (Pilot Station) 탁 트인 대한해협 앞바다로 전진 배치
+# SHANGHAI_PORT  = (31.366, 121.614)   # 원래 상하이 항구 위치 (양쯔강 하구 복잡한 수역)
+SHANGHAI_PORT  = (31.000, 122.00)   # 상하이 앞바다 외항(Pilot/오픈 바다)으로 적절히 전진 배치
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _NE_SHP_DIR = os.path.join(_PROJECT_ROOT, "data", "ne_10m_land")
 _NE_SHP_FILE = os.path.join(_NE_SHP_DIR, "ne_10m_land.shp")
@@ -60,7 +59,7 @@ def load_coastline(
     shp_path : str, optional
         shapefile 경로 (source='natural_earth' 또는 'gshhg')
     bounds : dict, optional
-        바운딩 박스. None이면 BUSAN_JEJU_BOUNDS 사용.
+        바운딩 박스. None이면 BUSAN_SHANGHAI_BOUNDS 사용.
 
     Returns
     -------
@@ -68,7 +67,7 @@ def load_coastline(
         육지 폴리곤 (bbox로 클리핑됨)
     """
     if bounds is None:
-        bounds = BUSAN_JEJU_BOUNDS
+        bounds = BUSAN_SHANGHAI_BOUNDS
 
     if source == "auto":
         # Natural Earth 10m 자동 감지

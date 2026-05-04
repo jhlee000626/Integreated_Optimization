@@ -1,115 +1,65 @@
-"""
-Verifi/spec.py
-논문의 DG SPEC과 추진 계수, 매개 변수 테이블
-"""
-V_MAX = 30 #Knots
+# spec.py
+import numpy as np
 
-PROP_SPECS ={
-    "C1" : 0.1018,
-    "C2" : 3.83,
-    "C3" : 1160,
-    'D' : 5.6,
-    'rho' : 1.025, # 해수 밀도 (g/cm^3)
-    'K_Q' : 0.0666 # 토크 효율 계수
+# ==========================================
+# 1. 시스템 기본 설정 (System Parameters)
+# ==========================================
+dt = 0.25  # 15 min = 0.25 hour [cite: 178]
+T = 20     # 총 타임스텝 수 [cite: 178]
+time_steps = list(range(1, T + 1))
+
+# ==========================================
+# 2. 발전기 사양 (Generator Parameters - Table 1) 
+# ==========================================
+K = 3 # 발전기 대수
+GEN_PARAMS = {
+    1: {'Pmax': 1.4, 'Pmin': 0.3, 'a0': 111, 'a1': 533, 'a2': 14, 'Fup': 25, 'FG': 140},
+    2: {'Pmax': 1.4, 'Pmin': 0.3, 'a0': 120, 'a1': 623, 'a2': 10, 'Fup': 25, 'FG': 161},
+    3: {'Pmax': 1.4, 'Pmin': 0.4, 'a0': 116, 'a1': 530, 'a2': 14, 'Fup': 25, 'FG': 140}
 }
 
-DT = 0.5
-T_TOTAL = 30.0
-
-RESERVE_SERVICE = 0.25
-RESERVE_PROPULSION = 0.191
-
+# ==========================================
+# 3. 배터리 (ESS) 사양 
+# ==========================================
+N = 2 # 배터리 유닛 수
 ESS_PARAMS = {
-    'E_rat': 8.75,          # 배터리 정격 용량 (MWh) 
-    'P_max': 7.0,       # 최대 충전 전력 (MW)
-    'SOC_0': 0.5,          # 초기 SOC (State of Charge)
-    'SOC_min': 0.2,        # 최소 허용 SOC
-    'SOC_max': 0.95,       # 최대 허용 SOC
-    'eta_ch': 0.92,        # 충전 효율
-    'eta_dch': 0.95,       # 방전 효율
-    'eta_rt': 0.90,        # 왕복 효율 (Round-trip) = thermal efficiency
-    'C_rep': 300,          # 배터리 교체 비용 (m.u / kWh) 
-    'L_cycle': 3000        # 배터리 수명 동안 처리되는 전력 용량 (KWh)
+    'Cap': 0.98,          # 용량 980 kWh = 0.98 MWh
+    'P_c_max': 0.5,       # 최대 충전 전력 (MW)
+    'P_dc_max': 0.5,      # 최대 방전 전력 (MW)
+    'eff_c': 0.95,        # 충전 효율 95%
+    'eff_dc': 0.97,       # 방전 효율 97%
+    'SOC_min': 0.1, 
+    'SOC_max': 1.0,
+    'F_B': 0.1,           # 배터리 운영 비용 (USD/kWh -> 스케일 조정 필요)
+    'F_Br': 0.035         # 예비 전력 비용
 }
 
-SERVICE_LOAD = [2.7, 3.7, 3.8, 2.4, 3.0, 2.6, 2.9, 3.0, 2.5, 3.6, 3.4, 3.5, 3.4, 3.7, 2.5, 3.7, 3.1, 2.7, 3.6, 3.6, 3.4, 3.0, 3.9, 3.4, 2.8, 3.4, 3.9, 2.7, 4.4, 4.4]
-
-DG_SPECS = {
-    "DG1" : {
-        "P_max" : 12.5,
-        "P_min" : 5,
-        "T_ON" : 3,
-        "T_OFF" : 2,
-        "Ramp_up" : 0.6,
-        "Ramp_down" : 0.6,
-        "alpha1" : 23,
-        "alpha2" : 2158,
-        "alpha3" : 300,
-        "C_SU" : 800
-    },
-
-    "DG2" : {
-        "P_max" : 12.5,
-        "P_min" : 5,
-        "T_ON" : 3,
-        "T_OFF" : 2,
-        "Ramp_up" : 0.6,
-        "Ramp_down" : 0.6,
-        "alpha1" : 23,
-        "alpha2" : 2158,
-        "alpha3" : 300,
-        "C_SU" : 800
-    },
-
-    "DG3" : {
-        "P_max" : 7,
-        "P_min" : 3,
-        "T_ON" : 2,
-        "T_OFF" : 1,
-        "Ramp_up" : 0.6,
-        "Ramp_down" : 0.6,
-        "alpha1" : 10,
-        "alpha2" : 1623,
-        "alpha3" : 210,
-        "C_SU" : 400
-    },
-
-    "DG4" : {
-        "P_max" : 7,
-        "P_min" : 3,
-        "T_ON" : 2,
-        "T_OFF" : 1,
-        "Ramp_up" : 0.6,
-        "Ramp_down" : 0.6,
-        "alpha1" : 10,
-        "alpha2" : 1623,
-        "alpha3" : 210,
-        "C_SU" : 400
-    },
-
-    "DG5" : {
-        "P_max" : 5,
-        "P_min" : 1,
-        "T_ON" : 1,
-        "T_OFF" : 1,
-        "Ramp_up" : 0.6,
-        "Ramp_down" : 0.6,
-        "alpha1" : 30,
-        "alpha2" : 1500,
-        "alpha3" : 150,
-        "C_SU" : 300
-    },
-
-    "DG6" : {
-        "P_max" : 5,
-        "P_min" : 1,
-        "T_ON" : 1,
-        "T_OFF" : 1,
-        "Ramp_up" : 0.6,
-        "Ramp_down" : 0.6,
-        "alpha1" : 30,
-        "alpha2" : 1500,
-        "alpha3" : 150,
-        "C_SU" : 300
-    }
+# ==========================================
+# 4. 항해 조건 (Voyage Parameters - Table 2) 
+# ==========================================
+VOYAGE_STAGES = {
+    'T_doc': [1, 2],
+    'T_cru': [3, 4, 5, 6, 7],
+    'T_dra': [8, 9, 10, 11, 12, 13],
+    'T_dep': [14, 15],
+    'T_ber': [16, 17, 18, 19, 20]
 }
+
+SPEED_NOMINAL = {
+    'doc': 6.0,  # kn
+    'cru': 10.0,
+    'dra': 8.3,
+    'dep': 6.0,
+    'ber': 0.0
+}
+
+SPEED_MARGINS = {
+    'mu1': 0.1, 'mu2': 0.1, 'lambda': 0.2, 'epsilon': 0.2
+}
+
+DISTANCES = {
+    'D_AB': 15.5, # nm
+    'D_AC': 31.0  # nm
+}
+
+P_ser = 0.1 # Service load (예시 값, MW)

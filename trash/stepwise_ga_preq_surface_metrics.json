@@ -1,0 +1,29 @@
+{
+  "p_req_min_mw": 5.635796736825526,
+  "p_req_max_mw": 25.899585065495696,
+  "min_d2_dsog2": 0.11881475080138958,
+  "min_d2_daz2": 0.0004215461815419985,
+  "min_hessian_determinant": 3.2150208159877934e-05,
+  "min_hessian_eigenvalue": 0.0002363293071759448,
+  "all_p_req_finite": true,
+  "all_gradient_components_finite": true,
+  "grid_points": 14641,
+  "stw_min_kts": 9.676260899709018,
+  "stw_max_kts": 21.014194131744485,
+  "sog_range_kts": [
+    12.0,
+    22.0
+  ],
+  "azimuth_range_deg": [
+    -30.0,
+    30.0
+  ],
+  "current_speed_ms": 1.2,
+  "current_dir_deg": 35.0,
+  "wind_speed_ms": 2.0,
+  "wind_dir_deg": 20.0,
+  "wave_height_m": 0.6,
+  "wave_period_s": 7.0,
+  "wave_dir_deg": 180.0,
+  "p_service_mw": 3.5
+}

@@ -1,6 +1,6 @@
 # Integrated Optimization
 
-This repository studies route optimization and onboard power scheduling for the Busan -> Jeju voyage.
+This repository studies route optimization and onboard power scheduling for the Busan -> Shanghai voyage.
 
 ## Main Components
 

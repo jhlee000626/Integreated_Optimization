@@ -8,7 +8,14 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.optimizer.ga_engine import build_required_power_profile, decode_route
+from src.optimizer.ga_engine import (
+    GENOTYPE_DECOUPLED,
+    build_required_power_profile,
+    compute_speed_distance_mismatch_penalty,
+    decode_route,
+    encode_fixed_speed_route_seed,
+    move_position,
+)
 from src.resistance.models import EnvironmentData
 from src.resistance.modified_dpm import compute_P_req
 
@@ -126,3 +133,30 @@ def test_decode_route_uses_first_absolute_then_delta_heading():
 
     assert route["headings"][0] == pytest.approx(180.0)
     assert route["headings"][1] == pytest.approx(190.0)
+
+
+def test_decoupled_fixed_speed_seed_preserves_geometry_and_speed():
+    start = (35.0, 129.0)
+    wp1 = move_position(start[0], start[1], 90.0, 8.0)
+    end = move_position(wp1[0], wp1[1], 90.0, 12.0)
+    waypoints = [start, wp1, end]
+
+    genes = encode_fixed_speed_route_seed(
+        waypoints,
+        base_speed_knots=10.0,
+        n_segments=2,
+        genotype_layout=GENOTYPE_DECOUPLED,
+    )
+    route = decode_route(
+        genes,
+        n_segments=2,
+        rta_h=2.0,
+        start_port=start,
+        end_port=end,
+        genotype_layout=GENOTYPE_DECOUPLED,
+    )
+
+    assert route["speeds"] == pytest.approx([10.0, 10.0])
+    assert route["distances_nm"] == pytest.approx([8.0, 12.0])
+    assert route["waypoints"][1] == pytest.approx(wp1)
+    assert compute_speed_distance_mismatch_penalty(route) == pytest.approx(0.0)

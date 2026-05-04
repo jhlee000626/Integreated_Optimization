@@ -12,7 +12,7 @@ import zipfile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data" / "era5"
-DEFAULT_AREA = [36.0, 125.0, 32.0, 131.0]  # north, west, south, east
+DEFAULT_AREA = [36.0, 121.0, 30.0, 131.0]  # north, west, south, east
 ERA5_VARIABLES = [
     "10m_u_component_of_wind",
     "10m_v_component_of_wind",
@@ -199,12 +199,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--start-datetime",
-        default="2025-03-25T00:00:00Z",
+        default="2025-03-01T00:00:00Z",
         help="UTC start time in ISO format, for example 2025-03-25T00:00:00Z",
     )
     parser.add_argument(
         "--end-datetime",
-        default="2025-03-25T23:00:00Z",
+        default="2025-03-02T00:00:00Z",
         help="UTC end time in ISO format, for example 2025-03-25T23:00:00Z",
     )
     parser.add_argument(

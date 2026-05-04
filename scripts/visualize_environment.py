@@ -27,11 +27,11 @@ ERA5_PATH, CMEMS_PATH = resolve_marine_dataset_paths(PROJECT_ROOT)
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 
 # ─── 공통 공간 범위 ───
-LON_MIN, LON_MAX = 125.0, 130.0
-LAT_MIN, LAT_MAX = 32.0, 36.0
+LON_MIN, LON_MAX = 121.0, 131.0
+LAT_MIN, LAT_MAX = 30.0, 36.0
 
 # ─── GSHHG 해안선 로드 ───
-from src.grid.no_go_zone import load_coastline, BUSAN_PORT, JEJU_PORT
+from src.grid.no_go_zone import load_coastline, BUSAN_PORT, SHANGHAI_PORT
 
 BOUNDS = {
     "lat_min": LAT_MIN, "lat_max": LAT_MAX,

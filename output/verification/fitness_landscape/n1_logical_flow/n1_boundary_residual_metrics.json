@@ -1,0 +1,30 @@
+{
+  "source_summary": {
+    "artifact_path": "C:\\Users\\user\\Desktop\\Integrated_Optimization\\output\\verification\\case2\\case_artifact.json",
+    "grid_n": 50,
+    "t_a": 34,
+    "t_b": 35,
+    "p_lo_mw": 14.385555211027285,
+    "p_hi_mw": 16.971500018524907,
+    "feasible_count": 2500,
+    "boundary_pixel_count": 99,
+    "boundary_jump_mean_kg": 16.468008630787082,
+    "boundary_jump_max_kg": 18.885594378283713,
+    "fuel_min_kg": 69485.89406695354,
+    "fuel_max_kg": 69975.60255211883,
+    "elapsed_sec": 1127.242755651474
+  },
+  "plane_a_kg_per_mw": 90.87325683044408,
+  "plane_b_kg_per_mw": 92.20225482334445,
+  "plane_c_kg": 66847.94668868418,
+  "r2_affine_plane": 0.9964689613986396,
+  "residual_min_kg": -6.152733776092646,
+  "residual_max_kg": 28.926108903746353,
+  "residual_std_kg": 5.8689677456320535,
+  "boundary_jump_mean_kg": 16.468008630787082,
+  "boundary_jump_max_kg": 18.885594378283713,
+  "nonboundary_jump_mean_kg": 5.024612174742299,
+  "nonboundary_jump_max_kg": 33.823012399239815,
+  "boundary_to_nonboundary_mean_ratio": 3.2774686001774236,
+  "interpretation": "The raw Case2 N-1 MILP fuel surface is dominated by an affine trend. It should be described as near-linear with DG-boundary seams/kinks, not as a globally staircase-shaped surface."
+}

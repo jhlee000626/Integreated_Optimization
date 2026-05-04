@@ -20,16 +20,15 @@ import numpy as np
 # =============================================================================
 
 # 해당 BOUNDS가지고 LAT, LON GRID COST MAP 생성
-BUSAN_JEJU_BOUNDS = {
-    "lat_min": 32.0,
+BUSAN_SHANGHAI_BOUNDS = {
+    "lat_min": 30.0,
     "lat_max": 36.0,
-    "lon_min": 125.0,
+    "lon_min": 121.0,
     "lon_max": 131.0,
 }
 
-
-BUSAN_PORT = (35.075, 129.113)
-JEJU_PORT  = (33.545, 126.558)
+BUSAN_PORT = (34.950, 129.150) 
+SHANGHAI_PORT  = (31.000, 122.00) 
 
 
 # =============================================================================
@@ -54,6 +53,8 @@ class CostMap:
         land_value: float = 100.0,
         bounds: dict | None=None,
         coastline_source: str = "natural_earth",
+        buffer_deg: float = 0.01,
+        use_cache: bool = True,
     ):
         """
         Parameters
@@ -66,11 +67,17 @@ class CostMap:
             바운딩 박스
         coastline_source : str
             해안선 소스 ('auto', 'natural_earth')
+        buffer_deg : float
+            안전 거리용 버퍼 범위 (기본 0.01도, 약 1km)
+        use_cache : bool
+            미리 래스터화된 맵 캐싱 사용 여부
         """
         self.resolution = resolution
         self.land_value = land_value
-        self.bounds = bounds or BUSAN_JEJU_BOUNDS
+        self.bounds = bounds or BUSAN_SHANGHAI_BOUNDS
         self.coastline_source = coastline_source
+        self.buffer_deg = buffer_deg
+        self.use_cache = use_cache
 
         # 격자 생성
         # np.arange(start, end, step) : start부터 end까지 step 간격으로 배열 생성, 약 200m 간격
@@ -97,30 +104,52 @@ class CostMap:
     def build(self) -> 'CostMap':
         """
         비용 맵 구축:
-            1. 해안선 로드
+            1. 해안선 로드 (혹은 캐시 로드)
             2. 이진 육지 마스크 래스터화
         """
 
-        # no_go_zone 모듈에서 load_coastline 함수를 불러옴
-        from src.grid.no_go_zone import load_coastline
+        import hashlib
 
-        # resolution에 따라 격자 개수 출력
         print(f"[CostMap] Building... (res={self.resolution}°, "
               f"grid={self.n_lat}×{self.n_lon})")
 
-        # ── 1. 해안선 로드 ──
-        # load_coastline 함수는 WGS84 좌표계의 육지(Polygon)의 vector data를 반환 [DD형식으로 반환]
-        land_poly = load_coastline(
-            source=self.coastline_source,
-            bounds=self.bounds,
-        )
+        # 캐시 키 생성 (해상도, 버퍼, 경계 기반)
+        args_str = f"{self.resolution}_{self.buffer_deg}_{self.bounds}_{self.coastline_source}"
+        cache_hash = hashlib.md5(args_str.encode()).hexdigest()
+        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "cost_map_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, f"land_mask_{cache_hash}.npy")
 
-        # ── 2. 이진 육지 마스크 래스터화 ──
-        # load_coastline에서 반환된 vector data를 rasterize하여 이진 마스크 생성
-        print("[CostMap] Rasterizing land mask...")
-        # _rasterize_land 메서드를 호출하여 이진 마스크 생성
-        # self.land_mask는 인덱스 0과 1(육지)을 포함하는 cost map이 생성
-        self.land_mask = self._rasterize_land(land_poly)
+        if self.use_cache and os.path.exists(cache_file):
+            print(f"[CostMap] Loading cached land mask... ({cache_file})")
+            self.land_mask = np.load(cache_file)
+        else:
+            # no_go_zone 모듈에서 load_coastline 함수를 불러옴
+            from src.grid.no_go_zone import load_coastline
+
+            # ── 1. 해안선 로드 ──
+            # load_coastline 함수는 WGS84 좌표계의 육지(Polygon)의 vector data를 반환 [DD형식으로 반환]
+            land_poly = load_coastline(
+                source=self.coastline_source,
+                bounds=self.bounds,
+            )
+
+            # 안전 버퍼 추가
+            if self.buffer_deg > 0:
+                print(f"[CostMap] Applying safety buffer of {self.buffer_deg}°...")
+                land_poly = land_poly.buffer(self.buffer_deg)
+
+            # ── 2. 이진 육지 마스크 래스터화 ──
+            # load_coastline에서 반환된 vector data를 rasterize하여 이진 마스크 생성
+            print("[CostMap] Rasterizing land mask...")
+            # _rasterize_land 메서드를 호출하여 이진 마스크 생성
+            # self.land_mask는 인덱스 0과 1(육지)을 포함하는 cost map이 생성
+            self.land_mask = self._rasterize_land(land_poly)
+
+            # 캐시 저장
+            if self.use_cache:
+                np.save(cache_file, self.land_mask)
+                print(f"[CostMap] Saved land mask cache to {cache_file}.")
 
         # land_pct는 land_mask에서 1의 개수를 전체 격자 개수로 나눈 값
         land_pct = self.land_mask.sum() / self.land_mask.size * 100
@@ -277,12 +306,17 @@ class CostMap:
             lons = [wp[1] for wp in route_wps]
             ax.plot(lons, lats, 'o-', color='blue', linewidth=2,
                     markersize=4, markeredgecolor='blue', label='Route')
+            marker_start = route_wps[0]
+            marker_end = route_wps[-1]
+        else:
+            marker_start = BUSAN_PORT
+            marker_end = SHANGHAI_PORT
 
         # 항구
-        ax.plot(BUSAN_PORT[1], BUSAN_PORT[0], '*', color='orange',
-                markersize=15, markeredgecolor='black', label='Busan Port')
-        ax.plot(JEJU_PORT[1], JEJU_PORT[0], '*', color='orange',
-                markersize=15, markeredgecolor='black', label='Jeju Port')
+        ax.plot(marker_start[1], marker_start[0], '*', color='orange',
+                markersize=15, markeredgecolor='black', label='Start')
+        ax.plot(marker_end[1], marker_end[0], '*', color='orange',
+                markersize=15, markeredgecolor='black', label='Destination')
 
         # cbar = fig.colorbar(im, ax=ax, shrink=0.7)
         # cbar.set_label("Violation Cost", fontsize=12)
@@ -310,4 +344,3 @@ def build_cost_map(
     """CostMap 인스턴스 생성 + 구축."""
     cmap = CostMap(resolution=resolution)
     return cmap.build()
-

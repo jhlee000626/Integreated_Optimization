@@ -30,31 +30,29 @@ def main() -> None:
     for dg in dg_names:
         fig, ax = plt.subplots(figsize=(8, 5))
         coeffs = sfoc_data[dg]
-        p_max = float(DG_SPECS[dg]["P_max"])
-        p_min = p_max * float(DG_MIN_LOAD_RATIO)
-        p_curve = np.linspace(p_min, p_max, 400)
-        p_curve_kw = 1000.0 * p_curve
+        load_factor = np.linspace(0, 1.0, 400)
         sfoc_curve = (
-            float(coeffs["alpha1"]) * p_curve_kw**2
-            + float(coeffs["alpha2"]) * p_curve_kw
+            float(coeffs["alpha1"]) * load_factor**2
+            + float(coeffs["alpha2"]) * load_factor
             + float(coeffs["alpha3"]))
         
-        breakpoints = generate_pwl_breakpoints(
-            p_min, p_max, float(coeffs["alpha1"]), float(coeffs["alpha2"]), float(coeffs["alpha3"]), n_segments=N_PWL_SEGMENTS)
+        # breakpoints = generate_pwl_breakpoints(
+        #     0, 1.0, float(coeffs["alpha1"]), float(coeffs["alpha2"]), float(coeffs["alpha3"]), n_segments=N_PWL_SEGMENTS)
         
-        bp_p = np.array([point[0] for point in breakpoints])
-        bp_fc = np.array([point[1] for point in breakpoints])
-        bp_sfoc = bp_fc / bp_p
+        # bp_p = np.array([point[0] for point in breakpoints])
+        # bp_fc = np.array([point[1] for point in breakpoints])
+        # bp_sfoc = bp_fc / bp_p
 
-        ax.plot(p_curve, sfoc_curve, color="#1E88E5", linewidth=2)
-        ax.plot(bp_p, bp_sfoc, "o--", color="#E53935", linewidth=1.6, markersize=5, label="PWL approximation")
-        for point_index, (power, sfoc_value) in enumerate(zip(bp_p, bp_sfoc)):
-            ax.annotate(f"k={point_index}", (power, sfoc_value), textcoords="offset points", xytext=(4, 4), fontsize=8)
-        ax.set_title(f"{dg} SFOC Curve vs PWL")
-        ax.set_xlabel("Power (MW)")
+        foc_curve = sfoc_curve * sfoc_data[dg]["P_max"] * 1000 * load_factor
+
+        ax.plot(load_factor, foc_curve, color="#1E88E5", linewidth=2)
+        # ax.plot(bp_p, bp_sfoc, "o--", color="#E53935", linewidth=1.6, markersize=5, label="PWL approximation")
+        # for point_index, (power, sfoc_value) in enumerate(zip(bp_p, bp_sfoc)):
+        #     ax.annotate(f"k={point_index}", (power, sfoc_value), textcoords="offset points", xytext=(4, 4), fontsize=8)
+        ax.set_title(f"{dg} SFOC Curve")
+        ax.set_xlabel("Load Factor")
         ax.set_ylabel("SFOC (g/kWh)")
         ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=9)
         plt.tight_layout()
         output_path = Path(__file__).resolve().with_name(f"{dg}_sfoc_curve.png")
         fig.savefig(output_path, dpi=180, bbox_inches="tight")

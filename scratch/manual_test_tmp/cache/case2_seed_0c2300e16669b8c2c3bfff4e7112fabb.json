@@ -1,0 +1,50 @@
+{
+  "case_name": "case2_ga_twostage",
+  "best_individual": [
+    12.0,
+    245.0,
+    11.5,
+    -7.0
+  ],
+  "best_fitness": 70353.0,
+  "route_summary": {
+    "waypoints": [
+      [
+        34.9,
+        129.1
+      ],
+      [
+        33.8,
+        126.6
+      ],
+      [
+        31.4,
+        122.4
+      ]
+    ],
+    "speeds": [
+      12.0,
+      11.5
+    ],
+    "headings": [
+      245.0,
+      238.0
+    ],
+    "valid": true,
+    "land_violation": 0.0
+  },
+  "metadata": {
+    "start_port": [
+      34.95,
+      129.15
+    ],
+    "end_port": [
+      31.0,
+      122.0
+    ],
+    "n_segments": 3,
+    "rta_h": 2.0,
+    "ga_cost_resolution": 0.1,
+    "departure_time_utc": "2025-03-25T06:00:00+00:00"
+  }
+}

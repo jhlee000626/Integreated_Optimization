@@ -1,0 +1,235 @@
+{
+  "case_name": "case2_ga_twostage",
+  "metrics": {
+    "case_name": "case2_ga_twostage",
+    "route_valid": true,
+    "route_violation": 0.0,
+    "objective": 70353.0,
+    "objective_kind": "energy_objective",
+    "milp_fuel_kg": 70353.0,
+    "milp_feasible": true,
+    "total_distance_nm": 23.5,
+    "p_req_mean_mw": 17.85,
+    "p_req_std_mw": 0.34999999999999964,
+    "p_req_min_mw": 17.5,
+    "p_req_max_mw": 18.2,
+    "last_speed_kts": 11.1,
+    "final_heading_delta_deg": -7.0,
+    "runtime_sec": 12.5,
+    "note": "manual-check"
+  },
+  "route": {
+    "waypoints": [
+      [
+        34.9,
+        129.1
+      ],
+      [
+        33.8,
+        126.6
+      ],
+      [
+        31.4,
+        122.4
+      ]
+    ],
+    "speeds": [
+      12.0,
+      11.5
+    ],
+    "speeds_sog": [
+      12.0,
+      11.5
+    ],
+    "speeds_stw": [
+      11.6,
+      11.1
+    ],
+    "headings": [
+      245.0,
+      238.0
+    ],
+    "delta_headings": [
+      -5.0,
+      -7.0
+    ],
+    "dt": [
+      1.0,
+      1.0
+    ],
+    "distances_nm": [
+      12.0,
+      11.5
+    ],
+    "valid": true,
+    "valid_departure_heading": true,
+    "valid_turning": true,
+    "valid_speed": true,
+    "valid_heading": true,
+    "land_violation": 0.0,
+    "last_speed": 11.1,
+    "last_speed_sog": 11.5,
+    "final_heading_delta": -7.0,
+    "nodes": [
+      {
+        "lat": 34.9,
+        "lon": 129.1,
+        "time_h": 0.0,
+        "time_utc": "2025-03-25T06:00:00+00:00",
+        "speed_out_kts": 12.0,
+        "speed_over_ground_kts": 12.0,
+        "speed_through_water_kts": 11.6,
+        "heading_out_deg": 245.0
+      },
+      {
+        "lat": 33.8,
+        "lon": 126.6,
+        "time_h": 1.0,
+        "time_utc": "2025-03-25T07:00:00+00:00",
+        "speed_out_kts": 11.5,
+        "speed_over_ground_kts": 11.5,
+        "speed_through_water_kts": 11.1,
+        "heading_out_deg": 238.0
+      },
+      {
+        "lat": 31.4,
+        "lon": 122.4,
+        "time_h": 2.0,
+        "time_utc": "2025-03-25T08:00:00+00:00",
+        "speed_out_kts": null,
+        "speed_over_ground_kts": null,
+        "speed_through_water_kts": null,
+        "heading_out_deg": null
+      }
+    ]
+  },
+  "power_profile": [
+    {
+      "segment": 0,
+      "phase": "cruise",
+      "when_utc": "2025-03-25T06:00:00+00:00",
+      "waypoint_from": [
+        34.9,
+        129.1
+      ],
+      "waypoint_to": [
+        33.8,
+        126.6
+      ],
+      "heading_deg": 245.0,
+      "encounter_angle_deg": 35.0,
+      "speed_sog_kts": 12.0,
+      "speed_stw_kts": 11.6,
+      "speed_stw_power_kts": 11.6,
+      "current_component_kts": 0.4,
+      "wind_speed_ms": 9.0,
+      "wind_dir_deg": 310.0,
+      "current_speed_ms": 0.5,
+      "current_dir_deg": 110.0,
+      "wave_height_m": 1.6,
+      "wave_period_s": 7.2,
+      "wave_dir_deg": 300.0,
+      "P_prop": 15.2,
+      "P_service": 3.0,
+      "P_req": 18.2,
+      "PD_kW": 13200.0,
+      "BHP_kW": 14500.0,
+      "total_resistance_N": 225000.0,
+      "R_calm_N": 180000.0,
+      "R_wind_N": 23000.0,
+      "R_wave_N": 22000.0,
+      "relative_wind_speed_ms": 12.0,
+      "relative_wind_dir_deg": 42.0
+    },
+    {
+      "segment": 1,
+      "phase": "cruise",
+      "when_utc": "2025-03-25T07:00:00+00:00",
+      "waypoint_from": [
+        33.8,
+        126.6
+      ],
+      "waypoint_to": [
+        31.4,
+        122.4
+      ],
+      "heading_deg": 238.0,
+      "encounter_angle_deg": 30.0,
+      "speed_sog_kts": 11.5,
+      "speed_stw_kts": 11.1,
+      "speed_stw_power_kts": 11.1,
+      "current_component_kts": 0.4,
+      "wind_speed_ms": 8.4,
+      "wind_dir_deg": 300.0,
+      "current_speed_ms": 0.6,
+      "current_dir_deg": 105.0,
+      "wave_height_m": 1.3,
+      "wave_period_s": 7.0,
+      "wave_dir_deg": 295.0,
+      "P_prop": 14.5,
+      "P_service": 3.0,
+      "P_req": 17.5,
+      "PD_kW": 12700.0,
+      "BHP_kW": 13900.0,
+      "total_resistance_N": 214000.0,
+      "R_calm_N": 172000.0,
+      "R_wind_N": 21000.0,
+      "R_wave_N": 21000.0,
+      "relative_wind_speed_ms": 11.5,
+      "relative_wind_dir_deg": 39.0
+    }
+  ],
+  "milp_result": {
+    "feasible": true,
+    "total_fuel_kg": 70353.0,
+    "summary": {
+      "dg_running_hours": {
+        "DG1": 2.0
+      }
+    },
+    "schedule": [
+      {
+        "t": 0,
+        "dt_h": 1.0,
+        "P_req_MW": 18.2,
+        "P_dc_MW": 0.5,
+        "P_c_MW": 0.0,
+        "SOC": 0.7,
+        "DG1_P_MW": 18.2,
+        "DG1_ON": 1,
+        "DG1_Start": 1,
+        "DG1_FC_kgh": 90.0
+      },
+      {
+        "t": 1,
+        "dt_h": 1.0,
+        "P_req_MW": 17.5,
+        "P_dc_MW": 0.0,
+        "P_c_MW": 0.2,
+        "SOC": 0.68,
+        "DG1_P_MW": 17.3,
+        "DG1_ON": 1,
+        "DG1_Start": 0,
+        "DG1_FC_kgh": 86.0
+      }
+    ]
+  },
+  "ga": {
+    "best_individual": [
+      12.0,
+      245.0,
+      11.5,
+      -7.0
+    ],
+    "best_fitness": 70353.0,
+    "logbook_summary": null
+  },
+  "departure_time_utc": "2025-03-25T06:00:00+00:00",
+  "map_bounds": {
+    "lat_min": 31.0,
+    "lat_max": 35.5,
+    "lon_min": 122.0,
+    "lon_max": 130.0
+  },
+  "cost_map_resolution": 0.5
+}

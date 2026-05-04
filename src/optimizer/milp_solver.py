@@ -53,7 +53,7 @@ def load_sfoc(json_path: str) -> Dict:
     return data
 
 # SFOC 함수 PWL 근사
-def fuel_consumption(P: float, alpha1: float, alpha2: float, alpha3: float) -> float:
+def fuel_consumption(P: float, P_max: float, alpha1: float, alpha2: float, alpha3: float) -> float:
     """
     연료 소비율 계산.
 
@@ -73,9 +73,9 @@ def fuel_consumption(P: float, alpha1: float, alpha2: float, alpha3: float) -> f
     SFOC 계수식은 출력 kW를 입력으로 사용한다.
     따라서 SFOC(P_kW)[g/kWh] * P_kW / 1000 = kg/h 가 된다.
     """
-    P_kW = 1000.0 * P
-    sfoc_g_per_kwh = alpha1 * P_kW ** 2 + alpha2 * P_kW + alpha3
-    return sfoc_g_per_kwh * P_kW / 1000.0 # kg/h로 연료 소모율
+    load_factor = P/P_max   
+    sfoc_g_per_kwh = alpha1 * (load_factor) ** 2 + alpha2 * (load_factor) + alpha3
+    return sfoc_g_per_kwh * P # kg/h로 연료 소모율
 
 # PWL (Piecewise Linear) 근사
 # =============================================================================
@@ -101,7 +101,7 @@ def generate_pwl_breakpoints(
     # P_min에서 P_max까지 n_segments 구간으로 균등 분할하여 breakpoint 계산
     for k in range(n_segments + 1):
         P = P_min + (P_max - P_min) * k / n_segments # MW
-        FC = fuel_consumption(P, alpha1, alpha2, alpha3) # kg/h
+        FC = fuel_consumption(P, P_max, alpha1, alpha2, alpha3) # kg/h
         breakpoints.append((P, FC))
     return breakpoints
 
@@ -124,6 +124,7 @@ class MILPSolver:
         sfoc_json_path: str = "config/sfoc.json",
         n_pwl_segments: int = 5,
         solver_name: str = "cplex_cmd",
+        enable_output_n_minus_1: bool = True,
     ):
         """
         Parameters
@@ -143,12 +144,13 @@ class MILPSolver:
         self.dg_names = list(self.dg_specs.keys()) # DG Key
 
         self.ess = ESS_SPECS
-        self.ess_power_limit = float(self.ess["capacity"]) * float(self.ess["c_rate"])
+        self.ess_power_limit = float(self.ess["power_limit"])
 
         # ── SFOC 로드 ──
         self.sfoc_data = load_sfoc(sfoc_json_path)
         self.n_pwl = n_pwl_segments
         self.solver_name = solver_name.lower()
+        self.enable_output_n_minus_1 = enable_output_n_minus_1
 
         # ── PWL Breakpoints 사전 계산 ──
         self.pwl_breakpoints = {}
@@ -203,6 +205,8 @@ class MILPSolver:
             "feasible": False,
             "status": status,
             "total_fuel_kg": float("inf"),
+            "total_operating_fuel_kg": float("inf"),
+            "total_start_fuel_kg": float("inf"),
             "total_start_cost": float("inf"),
             "objective_value": float("inf"),
             "solver_backend": solver_backend,
@@ -230,6 +234,7 @@ class MILPSolver:
         time_limit_sec: int = 120,
         msg: bool = False,
         enable_sos2: bool = False,
+        enable_output_n_minus_1: Optional[bool] = None,
     ) -> Dict:
         """
         MILP 발전기 + ESS 스케줄링 문제 풀이.
@@ -253,6 +258,10 @@ class MILPSolver:
             convex combination만 사용하여 빠르게 풀고, True이면
             δ 이진 변수를 추가하여 엄밀한 PWL 근사를 보장.
             SFOC가 볼록 함수일 때는 False에서도 최적해 동일.
+        enable_output_n_minus_1 : bool, optional
+            True이면 출력기반 N-1 reserve 제약을 적용. 각 DG 1대가
+            탈락한다고 가정했을 때, 나머지 온라인 DG headroom과 ESS
+            상향 reserve가 해당 DG의 현재 출력을 대체할 수 있어야 한다.
 
         Returns
         -------
@@ -271,8 +280,19 @@ class MILPSolver:
         assert len(dt) == T, "P_req와 dt의 길이가 같아야 합니다."
 
         # dict 형태로 전달된 초기 ON/OFF 상태가 없으면 모두 OFF로 간주
+        soc_min = float(self.ess["SOC_min"])
+        soc_max = float(self.ess["SOC_max"])
+        if not soc_min <= float(initial_SOC) <= soc_max:
+            raise ValueError(
+                f"initial_SOC must be within [{soc_min}, {soc_max}], got {initial_SOC}"
+            )
+
         if initial_u is None:
             initial_u = {dg: 0 for dg in self.dg_names}
+        else:
+            initial_u = {dg: int(initial_u.get(dg, 0)) for dg in self.dg_names}
+        if enable_output_n_minus_1 is None:
+            enable_output_n_minus_1 = self.enable_output_n_minus_1
 
         # =================================================================
         # 문제 정의
@@ -337,7 +357,6 @@ class MILPSolver:
             for t in range(T)
         }
 
-
         # PWL 보조 변수: λ (convex combination weights)
         # λ[dg, t, k] — breakpoint k의 가중치
         lam = {
@@ -374,10 +393,6 @@ class MILPSolver:
         prob += (
             lpSum(
                 FC_pwl[dg, t] * dt[t]
-                for dg in self.dg_names for t in range(T)
-            )
-            + lpSum(
-                self.dg_specs[dg]["cost_start"] * y[dg, t]
                 for dg in self.dg_names for t in range(T)
             ),
             "Total_Cost"
@@ -427,6 +442,15 @@ class MILPSolver:
                        - inv_eta_dc * P_dc[t])
                     * coeff,
                     f"SOC_update_{t}"
+                )
+
+            if enable_output_n_minus_1:
+                ess_n1_discharge_headroom = self.ess_power_limit - P_dc[t]
+                ess_n1_energy_headroom = (
+                    (SOC[t] - self.ess["SOC_min"])
+                    * self.ess["capacity"]
+                    * self.ess["eta_dc"]
+                    / dt[t]
                 )
 
             for dg in self.dg_names:
@@ -528,7 +552,33 @@ class MILPSolver:
                     f"NoSimultaneous_{dg}_{t}"
                 )
 
+            if enable_output_n_minus_1:
+                for failed_dg in self.dg_names:
+                    surviving_headroom = lpSum(
+                        self.dg_specs[other_dg]["P_max"] * u[other_dg, t]
+                        - P_dg[other_dg, t]
+                        for other_dg in self.dg_names
+                        if other_dg != failed_dg
+                    )
+                    prob += (
+                        surviving_headroom + ess_n1_discharge_headroom
+                        >= P_dg[failed_dg, t],
+                        f"NMinus1_OutputReservePower_{failed_dg}_{t}"
+                    )
+                    prob += (
+                        surviving_headroom + ess_n1_energy_headroom
+                        >= P_dg[failed_dg, t],
+                        f"NMinus1_OutputReserveEnergy_{failed_dg}_{t}"
+                    )
+
         # ─── (7) 최소 기동/정지 시간 ───
+        # SOC 초기 == 마지막
+        if T > 0:
+            prob += (
+                SOC[T - 1] >= initial_SOC,
+                "TerminalSOC_Target",
+            )
+
         for dg in self.dg_names:
             min_up_h = self.dg_specs[dg]["min_up"]
             min_down_h = self.dg_specs[dg]["min_down"]
@@ -578,8 +628,8 @@ class MILPSolver:
 
         # 상세 스케줄 추출
         schedule = []
-        total_fuel = 0.0
-        total_start_cost = 0.0
+        total_operating_fuel = 0.0
+        total_start_fuel = 0.0
 
         for t in range(T):
             step = {
@@ -590,37 +640,78 @@ class MILPSolver:
                 "P_c_MW": value(P_c[t]),
                 "SOC": value(SOC[t]),
             }
+            dg_outputs = {}
 
             for dg in self.dg_names:
                 p_val = value(P_dg[dg, t])
                 u_val = value(u[dg, t])
                 y_val = value(y[dg, t])
                 fc_val = value(FC_pwl[dg, t])
+                dg_outputs[dg] = p_val
 
                 step[f"{dg}_P_MW"] = p_val
                 step[f"{dg}_ON"] = int(round(u_val))
                 step[f"{dg}_Start"] = int(round(y_val))
                 step[f"{dg}_FC_kgh"] = fc_val
+                start_fuel = (
+                    float(self.dg_specs[dg]["cost_start"])
+                    if int(round(y_val)) == 1
+                    else 0.0
+                )
+                step[f"{dg}_StartFuel_kg"] = start_fuel
 
                 # 연료 적산
-                total_fuel += fc_val * dt[t]
-                if int(round(y_val)) == 1:
-                    total_start_cost += self.dg_specs[dg]["cost_start"]
+                total_operating_fuel += fc_val * dt[t]
+                total_start_fuel += start_fuel
+
+            step_operating_fuel = sum(step[f"{dg}_FC_kgh"] for dg in self.dg_names) * dt[t]
+            step["StartFuel_kg"] = sum(step[f"{dg}_StartFuel_kg"] for dg in self.dg_names)
+            step["FuelWithStart_kg"] = step_operating_fuel + step["StartFuel_kg"]
+
+            if enable_output_n_minus_1:
+                ess_n1_discharge_headroom = self.ess_power_limit - step["P_dc_MW"]
+                ess_n1_energy_headroom = (
+                    (step["SOC"] - self.ess["SOC_min"])
+                    * self.ess["capacity"]
+                    * self.ess["eta_dc"]
+                    / dt[t]
+                )
+                ess_n1_val = min(ess_n1_discharge_headroom, ess_n1_energy_headroom)
+                step["ESS_N1_reserve_MW"] = ess_n1_val
+                step["N1_largest_output_MW"] = max(dg_outputs.values(), default=0.0)
+                step["N1_min_margin_MW"] = min(
+                    sum(
+                        self.dg_specs[other_dg]["P_max"] * step[f"{other_dg}_ON"]
+                        - dg_outputs[other_dg]
+                        for other_dg in self.dg_names
+                        if other_dg != failed_dg
+                    )
+                    + ess_n1_val
+                    - dg_outputs[failed_dg]
+                    for failed_dg in self.dg_names
+                )
 
             schedule.append(step)
+
+        total_fuel = total_operating_fuel + total_start_fuel
 
         return {
             "feasible": True,
             "status": status,
             "total_fuel_kg": total_fuel,
-            "total_start_cost": total_start_cost,
+            "total_operating_fuel_kg": total_operating_fuel,
+            "total_start_fuel_kg": total_start_fuel,
+            "total_start_cost": total_start_fuel,
             "objective_value": value(prob.objective),
             "solver_backend": solver_backend,
             "schedule": schedule,
             "summary": self._build_summary(
                 schedule,
                 total_fuel,
-                total_start_cost,
+                total_operating_fuel,
+                total_start_fuel,
+                initial_soc=float(initial_SOC),
+                enable_output_n_minus_1=enable_output_n_minus_1,
             ),
         }
 
@@ -654,7 +745,10 @@ class MILPSolver:
         self,
         schedule: List[dict],
         total_fuel: float,
-        total_start_cost: float,
+        total_operating_fuel: float,
+        total_start_fuel: float,
+        initial_soc: Optional[float] = None,
+        enable_output_n_minus_1: bool = False,
     ) -> dict:
         """결과 요약 생성."""
         T = len(schedule)
@@ -671,14 +765,35 @@ class MILPSolver:
                     dg_fuel[dg] += s[f"{dg}_FC_kgh"] * s["dt_h"]
                 dg_starts[dg] += s[f"{dg}_Start"]
 
+        n1_margins = [
+            float(s["N1_min_margin_MW"])
+            for s in schedule
+            if "N1_min_margin_MW" in s
+        ]
+        n1_ess_reserves = [
+            float(s["ESS_N1_reserve_MW"])
+            for s in schedule
+            if "ESS_N1_reserve_MW" in s
+        ]
+
         return {
             "total_voyage_h": total_hours,
             "total_fuel_kg": total_fuel,
-            "total_start_cost_usd": total_start_cost,
+            "total_operating_fuel_kg": total_operating_fuel,
+            "total_start_fuel_kg": total_start_fuel,
+            "total_start_cost_usd": total_start_fuel,
             "dg_running_hours": dg_hours,
             "dg_fuel_kg": dg_fuel,
             "dg_start_count": dg_starts,
+            "ess_initial_SOC": initial_soc,
             "ess_final_SOC": schedule[-1]["SOC"] if schedule else None,
+            "n_minus_1_enabled": enable_output_n_minus_1,
+            "n_minus_1_min_margin_mw": min(n1_margins) if n1_margins else None,
+            "n_minus_1_avg_ess_reserve_mw": (
+                sum(n1_ess_reserves) / len(n1_ess_reserves)
+                if n1_ess_reserves
+                else None
+            ),
         }
 
 

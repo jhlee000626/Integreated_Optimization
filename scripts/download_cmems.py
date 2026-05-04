@@ -12,9 +12,9 @@ import copernicusmarine
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = PROJECT_ROOT / "data" / "cmems"
 DEFAULT_AREA = {
-    "lon_min": 125.0,
+    "lon_min": 121.0,
     "lon_max": 131.0,
-    "lat_min": 32.0,
+    "lat_min": 30.0,
     "lat_max": 36.0,
 }
 DEFAULT_DATASET_ID = "cmems_mod_glo_phy_anfc_0.083deg_PT1H-m"
@@ -70,6 +70,8 @@ def download_cmems(
     depth_m: float = DEFAULT_DEPTH_M,
     area: dict[str, float] | None = None,
     output_name: str | None = None,
+    username: str | None = None,
+    password: str | None = None,
 ) -> str:
     start_utc = _parse_utc_datetime(start_datetime)
     end_utc = _parse_utc_datetime(end_datetime)
@@ -101,6 +103,8 @@ def download_cmems(
     _patch_cmems_netcdf_writer()
     copernicusmarine.subset(
         dataset_id=dataset_id,
+        username=username,
+        password=password,
         variables=["uo", "vo"],
         minimum_longitude=area["lon_min"],
         maximum_longitude=area["lon_max"],
@@ -127,12 +131,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--start-datetime",
-        default="2025-03-25T00:00:00Z",
+        default="2025-03-01T00:00:00Z",
         help="UTC start time in ISO format, for example 2025-03-25T00:00:00Z",
     )
     parser.add_argument(
         "--end-datetime",
-        default="2025-03-25T23:00:00Z",
+        default="2025-03-02T00:00:00Z",
         help="UTC end time in ISO format, for example 2025-03-25T23:00:00Z",
     )
     parser.add_argument("--lon-min", type=float, default=DEFAULT_AREA["lon_min"])
@@ -142,6 +146,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--depth-m", type=float, default=DEFAULT_DEPTH_M)
     parser.add_argument("--dataset-id", default=DEFAULT_DATASET_ID)
     parser.add_argument("--output-name", default=None)
+    parser.add_argument("--username", default=None, help="Copernicus Marine username.")
+    parser.add_argument("--password", default=None, help="Copernicus Marine password.")
     return parser
 
 
@@ -159,6 +165,8 @@ def main() -> None:
             "lat_max": args.lat_max,
         },
         output_name=args.output_name,
+        username=args.username,
+        password=args.password,
     )
 
 

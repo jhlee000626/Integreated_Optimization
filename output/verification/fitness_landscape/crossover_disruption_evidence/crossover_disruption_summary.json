@@ -1,0 +1,95 @@
+{
+  "settings": {
+    "initial_soc": 0.7,
+    "n_arithmetic": 41,
+    "n_uniform": 60,
+    "n_sbx_profile_proxy": 60,
+    "random_seed": 20260428,
+    "sbx_eta": 20.0,
+    "n1_contingency": true,
+    "note": "Same-energy P_req-profile recombination proxy; not a full route-gene SBX rerun."
+  },
+  "parent_gap_case3_scaled_minus_case2_kg": 26.527540144248633,
+  "by_method": {
+    "arithmetic": {
+      "feasible_count": 41,
+      "fuel_min_kg": 69915.41689679137,
+      "fuel_max_kg": 69946.25222698401,
+      "fuel_range_kg": 30.835330192639958,
+      "fuel_std_kg": 8.217289753661202,
+      "start_fuel_min_kg": 340.0,
+      "start_fuel_max_kg": 410.0,
+      "dg_count_switches_mean": 0.43902439024390244,
+      "dg_count_switches_max": 2.0
+    },
+    "parent": {
+      "feasible_count": 2,
+      "fuel_min_kg": 69919.72468683976,
+      "fuel_max_kg": 69946.25222698401,
+      "fuel_range_kg": 26.527540144248633,
+      "fuel_std_kg": 13.263770072124316,
+      "start_fuel_min_kg": 340.0,
+      "start_fuel_max_kg": 410.0,
+      "dg_count_switches_mean": 1.0,
+      "dg_count_switches_max": 2.0
+    },
+    "sbx_profile_proxy": {
+      "feasible_count": 60,
+      "fuel_min_kg": 69918.79982757544,
+      "fuel_max_kg": 69934.72730108893,
+      "fuel_range_kg": 15.927473513496807,
+      "fuel_std_kg": 3.261764765033262,
+      "start_fuel_min_kg": 340.0,
+      "start_fuel_max_kg": 410.0,
+      "dg_count_switches_mean": 1.9,
+      "dg_count_switches_max": 2.0
+    },
+    "uniform": {
+      "feasible_count": 60,
+      "fuel_min_kg": 69934.11842266444,
+      "fuel_max_kg": 69948.73347564081,
+      "fuel_range_kg": 14.615052976369043,
+      "fuel_std_kg": 3.2550447736503108,
+      "start_fuel_min_kg": 340.0,
+      "start_fuel_max_kg": 340.0,
+      "dg_count_switches_mean": 0.0,
+      "dg_count_switches_max": 0.0
+    }
+  },
+  "best_child": {
+    "method": "arithmetic",
+    "child_id": "arithmetic_036",
+    "alpha": 0.9,
+    "energy_mwh": 385.433050236777,
+    "p_req_mean_mw": 16.059710426532373,
+    "p_req_std_mw": 0.5070037160915288,
+    "p_req_min_mw": 14.513103031217534,
+    "p_req_max_mw": 16.95464253596043,
+    "mean_abs_ramp_mw": 0.32497664807313825,
+    "feasible": true,
+    "status": "Optimal",
+    "fuel_kg": 69915.41689679137,
+    "operating_fuel_kg": 69505.41689679137,
+    "start_fuel_kg": 410.0,
+    "dg_count_switches": 2,
+    "commitment_signature": "222222222222222222222222222222222332222222222222"
+  },
+  "worst_child": {
+    "method": "uniform",
+    "child_id": "uniform_051",
+    "alpha": 0.375,
+    "energy_mwh": 385.43305023677704,
+    "p_req_mean_mw": 16.059710426532376,
+    "p_req_std_mw": 1.0741233439505316,
+    "p_req_min_mw": 14.596283378944445,
+    "p_req_max_mw": 18.631872958153465,
+    "mean_abs_ramp_mw": 0.8843882406118669,
+    "feasible": true,
+    "status": "Optimal",
+    "fuel_kg": 69948.73347564081,
+    "operating_fuel_kg": 69608.73347564081,
+    "start_fuel_kg": 340.0,
+    "dg_count_switches": 0,
+    "commitment_signature": "222222222222222222222222222222222222222222222222"
+  }
+}

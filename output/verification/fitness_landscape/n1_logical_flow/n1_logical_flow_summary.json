@@ -1,0 +1,200 @@
+{
+  "artifact_path": "C:\\Users\\user\\Desktop\\Integrated_Optimization\\output\\verification\\case2\\case_artifact.json",
+  "narrative_order": [
+    "single-slot P_req scan",
+    "fixed-profile one-timestep P_req scan",
+    "3D required-energy vs MILP-fuel surface",
+    "DG ON/OFF boundary tracking on the MILP fuel surface",
+    "SFOC/FC transition explanation"
+  ],
+  "selected_timesteps": {
+    "route_t_star": 34,
+    "surface_t_a": 34,
+    "surface_t_b": 35
+  },
+  "step1_single_slot": {
+    "transition_count": 2,
+    "max_jump_kg": 202.77710787500018,
+    "transitions": [
+      {
+        "P_star_MW": 15.625,
+        "from_count": 2,
+        "to_count": 3,
+        "from_commitment": "DG1+DG2",
+        "to_commitment": "DG2+DG3+DG4",
+        "fuel_before_kg": 3140.2006506499993,
+        "fuel_after_kg": 3294.7598071249995,
+        "fuel_jump_kg": 154.55915647500024,
+        "operating_jump_kg": 84.55915647500024,
+        "start_jump_kg": 70.0,
+        "n1_margin_before_mw": 0.14999999999999947,
+        "n1_margin_after_mw": 5.899999999999999
+      },
+      {
+        "P_star_MW": 24.125,
+        "from_count": 3,
+        "to_count": 4,
+        "from_commitment": "DG1+DG2+DG4",
+        "to_commitment": "DG1+DG2+DG3+DG4",
+        "fuel_before_kg": 4788.1824625,
+        "fuel_after_kg": 4990.959570375,
+        "fuel_jump_kg": 202.77710787500018,
+        "operating_jump_kg": 82.77710787500018,
+        "start_jump_kg": 120.0,
+        "n1_margin_before_mw": 0.04999999999999982,
+        "n1_margin_after_mw": 8.2
+      }
+    ]
+  },
+  "step2_fixed_profile": {
+    "transition_count": 1,
+    "max_jump_kg": 12.306454791658325,
+    "transitions": [
+      {
+        "P_star_MW": 16.89831290133158,
+        "from_count": 2,
+        "to_count": 3,
+        "from_commitment": "DG2+DG3",
+        "to_commitment": "DG1+DG3+DG4",
+        "fuel_before_kg": 69901.88717331996,
+        "fuel_after_kg": 69914.19362811162,
+        "fuel_jump_kg": 12.306454791658325,
+        "operating_jump_kg": 12.306454791658325,
+        "start_jump_kg": 0.0,
+        "n1_margin_before_mw": 0.00981900060000207,
+        "n1_margin_after_mw": 5.98
+      }
+    ]
+  },
+  "step3_step4_surface": {
+    "artifact_path": "C:\\Users\\user\\Desktop\\Integrated_Optimization\\output\\verification\\case2\\case_artifact.json",
+    "grid_n": 50,
+    "t_a": 34,
+    "t_b": 35,
+    "p_lo_mw": 14.385555211027285,
+    "p_hi_mw": 16.971500018524907,
+    "feasible_count": 2500,
+    "boundary_pixel_count": 99,
+    "boundary_jump_mean_kg": 16.468008630787082,
+    "boundary_jump_max_kg": 18.885594378283713,
+    "fuel_min_kg": 69485.89406695354,
+    "fuel_max_kg": 69975.60255211883,
+    "elapsed_sec": 1127.242755651474
+  },
+  "largest_single_step_explanation": {
+    "transition": {
+      "P_star_MW": 24.125,
+      "from_count": 3,
+      "to_count": 4,
+      "from_commitment": "DG1+DG2+DG4",
+      "to_commitment": "DG1+DG2+DG3+DG4",
+      "fuel_before_kg": 4788.1824625,
+      "fuel_after_kg": 4990.959570375,
+      "fuel_jump_kg": 202.77710787500018,
+      "operating_jump_kg": 82.77710787500018,
+      "start_jump_kg": 120.0,
+      "n1_margin_before_mw": 0.04999999999999982,
+      "n1_margin_after_mw": 8.2
+    },
+    "before": {
+      "single_P_req_MW": 24.0,
+      "feasible": "True",
+      "status": "Optimal",
+      "total_fuel_kg": "4788.1824625",
+      "total_operating_fuel_kg": "4328.1824625",
+      "total_start_fuel_kg": "460.0",
+      "objective_value": "4788.1824625",
+      "DG_count": "3",
+      "commitment": "DG1+DG2+DG4",
+      "N1_min_margin_MW": "0.04999999999999982",
+      "DG1_ON": "1",
+      "DG1_P_MW": "9.18",
+      "DG2_ON": "1",
+      "DG2_P_MW": "7.680000000000001",
+      "DG3_ON": "0",
+      "DG3_P_MW": "0.0",
+      "DG4_ON": "1",
+      "DG4_P_MW": "7.14"
+    },
+    "after": {
+      "single_P_req_MW": 24.25,
+      "feasible": "True",
+      "status": "Optimal",
+      "total_fuel_kg": "4990.959570375",
+      "total_operating_fuel_kg": "4410.959570375",
+      "total_start_fuel_kg": "580.0",
+      "objective_value": "4990.959570375",
+      "DG_count": "4",
+      "commitment": "DG1+DG2+DG3+DG4",
+      "N1_min_margin_MW": "8.2",
+      "DG1_ON": "1",
+      "DG1_P_MW": "7.5600000000000005",
+      "DG2_ON": "1",
+      "DG2_P_MW": "4.929999999999999",
+      "DG3_ON": "1",
+      "DG3_P_MW": "5.88",
+      "DG4_ON": "1",
+      "DG4_P_MW": "5.88"
+    }
+  },
+  "largest_route_step_explanation": {
+    "transition": {
+      "P_star_MW": 16.89831290133158,
+      "from_count": 2,
+      "to_count": 3,
+      "from_commitment": "DG2+DG3",
+      "to_commitment": "DG1+DG3+DG4",
+      "fuel_before_kg": 69901.88717331996,
+      "fuel_after_kg": 69914.19362811162,
+      "fuel_jump_kg": 12.306454791658325,
+      "operating_jump_kg": 12.306454791658325,
+      "start_jump_kg": 0.0,
+      "n1_margin_before_mw": 0.00981900060000207,
+      "n1_margin_after_mw": 5.98
+    },
+    "before": {
+      "idx": 154,
+      "route_P_req_MW": 16.890180999421208,
+      "t_star": 34,
+      "feasible": true,
+      "status": "Optimal",
+      "total_fuel_kg": 69901.88717331996,
+      "total_operating_fuel_kg": 69491.88717331996,
+      "total_start_fuel_kg": 410.0,
+      "objective_value": 69901.88717332,
+      "DG_count": 2,
+      "commitment": "DG2+DG3",
+      "N1_min_margin_MW": 0.00981900060000207,
+      "DG1_ON": 0,
+      "DG1_P_MW": 0.0,
+      "DG2_ON": 1,
+      "DG2_P_MW": 9.18,
+      "DG3_ON": 1,
+      "DG3_P_MW": 7.14,
+      "DG4_ON": 0,
+      "DG4_P_MW": 0.0
+    },
+    "after": {
+      "idx": 155,
+      "route_P_req_MW": 16.906444803241946,
+      "t_star": 34,
+      "feasible": true,
+      "status": "Optimal",
+      "total_fuel_kg": 69914.19362811162,
+      "total_operating_fuel_kg": 69504.19362811162,
+      "total_start_fuel_kg": 410.0,
+      "objective_value": 69914.19362811165,
+      "DG_count": 3,
+      "commitment": "DG1+DG3+DG4",
+      "N1_min_margin_MW": 5.98,
+      "DG1_ON": 1,
+      "DG1_P_MW": 7.5600000000000005,
+      "DG2_ON": 0,
+      "DG2_P_MW": 0.0,
+      "DG3_ON": 1,
+      "DG3_P_MW": 5.88,
+      "DG4_ON": 1,
+      "DG4_P_MW": 5.88
+    }
+  }
+}

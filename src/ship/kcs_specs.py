@@ -32,8 +32,8 @@ KCS_PROPULSION = {
     "PropellerDiameter": 7.9,
     "AEAO": 0.65,
     "NumberOfBlades": 5,
-    "N_MCR": 89.0,
-    "DesignSpeed": 20.0,
+    "N_MCR": 104.0,
+    "DesignSpeed": 22.0,
     "eta_shaft": 0.98,
     "ContainerHeight": 2.6,
     "ContainerTiersOnDeck": 9,
@@ -45,26 +45,28 @@ KCS_ISO15016 = {
     **KCS_PROPULSION,
 }
 
-POWER_MODEL = {
-    "a1": 0.00238,
-    "a2_exp": 3,
-}
 
 DG_SPECS = {
     "DG1": {
-        "P_max": 14.4,
+        "P_max": 10.8,
         "min_up": 1.0,
         "min_down": 0.5,
         "cost_start": 170,
     },
     "DG2": {
-        "P_max": 14.4,
+        "P_max": 10.8,
         "min_up": 1.0,
         "min_down": 0.5,
         "cost_start": 170,
     },
     "DG3": {
-        "P_max": 10.8,
+        "P_max": 8.4,
+        "min_up": 1.0,
+        "min_down": 0.5,
+        "cost_start": 120,
+    },
+    "DG4": {
+        "P_max": 8.4,
         "min_up": 1.0,
         "min_down": 0.5,
         "cost_start": 120,
@@ -75,19 +77,19 @@ DG_SPECS = {
 DG_MIN_LOAD_RATIO = 0.25
 
 ESS_SPECS = {
-    "capacity": 30.0,
-    "c_rate": 0.5,
-    "SOC_max": 0.90,
-    "SOC_min": 0.30,
+    "capacity": 10.0,
+    "power_limit": 8.5,
+    "SOC_max": 0.95,
+    "SOC_min": 0.20,
     "eta_c": 0.95,
     "eta_dc": 0.97,
 }
 
 SERVICE_LOAD = {
-    "departure": 2.0,
-    "approach": 2.0,
+    "departure": 2.5,
+    "approach": 2.5,
     "berthing": 2.0,
-    "cruising": 2.5,
+    "cruising": 3.5,
 }
 
 # SERVICE_LOAD = {

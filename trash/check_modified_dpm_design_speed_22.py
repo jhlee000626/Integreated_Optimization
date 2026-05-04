@@ -18,7 +18,7 @@ OUTPUT_CSV = Path(__file__).with_name("modified_dpm_design_speed_22.csv")
 
 def build_ship_specs() -> dict:
     ship_specs = dict(KCS_ISO15016)
-    ship_specs["DesignSpeed"] = 20.0
+    ship_specs["DesignSpeed"] = 22.0
     return ship_specs
 
 

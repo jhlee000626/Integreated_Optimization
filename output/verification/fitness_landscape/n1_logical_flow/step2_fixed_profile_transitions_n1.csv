@@ -1,0 +1,2 @@
+P_star_MW,from_count,to_count,from_commitment,to_commitment,fuel_before_kg,fuel_after_kg,fuel_jump_kg,operating_jump_kg,start_jump_kg,n1_margin_before_mw,n1_margin_after_mw
+16.89831290133158,2,3,DG2+DG3,DG1+DG3+DG4,69901.88717331996,69914.19362811162,12.306454791658325,12.306454791658325,0.0,0.00981900060000207,5.98
